@@ -1,0 +1,38 @@
+{
+  "name": "deelos-print-agent",
+  "version": "1.0.0",
+  "description": "Production Deelos Print Agent for silent POS printing.",
+  "main": "src/index.js",
+  "bin": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "build:win": "yao-pkg . --targets node18-win-x64 --output dist/windows/deelos-print-agent.exe",
+    "build:mac-x64": "yao-pkg . --targets node18-macos-x64 --output dist/macos-x64/deelos-print-agent",
+    "build:mac-arm64": "yao-pkg . --targets node18-macos-arm64 --output dist/macos-arm64/deelos-print-agent"
+  },
+  "pkg": {
+    "assets": [
+      "config.json"
+    ],
+    "targets": [
+      "node18-win-x64",
+      "node18-macos-x64",
+      "node18-macos-arm64"
+    ],
+    "outputPath": "dist"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.20.0"
+  },
+  "keywords": [
+    "deelos",
+    "pos",
+    "print-agent",
+    "receipt",
+    "escpos"
+  ],
+  "author": "Jodsuns Technology",
+  "license": "UNLICENSED"
+}

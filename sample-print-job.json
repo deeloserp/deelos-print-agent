@@ -1,0 +1,46 @@
+{
+  "source": "deelos-pos",
+  "branch_id": 1,
+  "order_id": 25,
+  "order_code": "ORD-00025",
+  "jobs": [
+    {
+      "type": "customer_receipt",
+      "printer_role": "receipt",
+      "copies": 1,
+      "station": {
+        "station_key": "receipt",
+        "station_name": "Receipt Printer",
+        "printer_role": "receipt",
+        "connection_type": "usb",
+        "printer_name": "YOUR_PRINTER_NAME_FROM_PRINTERS_ENDPOINT",
+        "printer_ip": "",
+        "printer_port": 9100,
+        "paper_size": "80mm",
+        "copies": 1
+      },
+      "payload": {
+        "business_name": "Deelos ERP",
+        "branch_name": "Main Branch",
+        "order_code": "TEST-001",
+        "date": "2026-06-06 10:15",
+        "cashier": "Cashier",
+        "customer": "Walk-in",
+        "items": [
+          {
+            "name": "Test Item",
+            "qty": 1,
+            "total": 0
+          }
+        ],
+        "subtotal": 0,
+        "discount": 0,
+        "tax": 0,
+        "total": 0,
+        "amount_paid": 0,
+        "balance": 0,
+        "footer": "Print test completed"
+      }
+    }
+  ]
+}

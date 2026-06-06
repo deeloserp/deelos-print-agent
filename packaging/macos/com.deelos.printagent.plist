@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.deelos.printagent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Library/Application Support/Deelos Print Agent/deelos-print-agent</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Library/Application Support/Deelos Print Agent</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Library/Logs/Deelos Print Agent/agent.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Library/Logs/Deelos Print Agent/agent.err.log</string>
+  </dict>
+</plist>

@@ -1,0 +1,10 @@
+{
+  "agentName": "Deelos Print Agent",
+  "version": "1.0.0",
+  "host": "127.0.0.1",
+  "port": 4789,
+  "allowOrigin": "*",
+  "defaultPaperSize": "80mm",
+  "logPrintJobs": true,
+  "maxBodyBytes": 1048576
+}
