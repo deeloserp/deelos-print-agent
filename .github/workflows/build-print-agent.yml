@@ -1,0 +1,97 @@
+name: Build Deelos Print Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-windows:
+    name: Build Windows Setup
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Windows executable
+        run: npm run build:win
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Build Windows installer
+        run: iscc packaging/windows/deelos-print-agent.iss
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: deelos-print-agent-windows
+          path: |
+            release/windows/*.exe
+            dist/windows/*.exe
+
+  build-macos-arm64:
+    name: Build macOS ARM64 Package
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build macOS ARM64 executable
+        run: npm run build:mac-arm64
+
+      - name: Build macOS ARM64 pkg
+        run: bash packaging/macos/build-pkg.sh arm64
+
+      - name: Upload macOS ARM64 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deelos-print-agent-macos-arm64
+          path: release/macos/*.pkg
+
+  build-macos-intel:
+    name: Build macOS Intel Package
+    runs-on: macos-13
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build macOS Intel executable
+        run: npm run build:mac-x64
+
+      - name: Build macOS Intel pkg
+        run: bash packaging/macos/build-pkg.sh x64
+
+      - name: Upload macOS Intel package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deelos-print-agent-macos-intel
+          path: release/macos/*.pkg
