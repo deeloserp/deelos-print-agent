@@ -103,7 +103,7 @@ async function writeLocalPrinter(buffer, station) {
   if (process.platform === 'win32') {
     const fs = require('fs');
     const path = require('path');
-    const tmp = path.join(os.tmpdir(), `deelos-print-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`);
+    const tmp = path.join(os.tmpdir(), `deelos-print-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`);
 
     fs.writeFileSync(tmp, buffer);
 
@@ -112,7 +112,7 @@ async function writeLocalPrinter(buffer, station) {
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
         '-Command',
-        `Get-Content -LiteralPath "${tmp.replace(/"/g, '\\"')}" | Out-Printer -Name "${printerName.replace(/"/g, '\\"')}"`
+        `Get-Content -LiteralPath "${tmp.replace(/"/g, '\\"')}" -Encoding Byte | Out-Printer -Name "${printerName.replace(/"/g, '\\"')}"`
       ]);
 
       return { ok: true, transport: 'windows-out-printer', printer_name: printerName };
@@ -233,39 +233,133 @@ async function testPrint(body, config) {
     station,
     payload: {
       business_name: body.business_name || 'DEELOS ERP',
+      business_phone: body.business_phone || 'Test phone',
+      business_email: body.business_email || 'support@deeloserp.com',
+      business_website: body.business_website || 'www.deeloserp.com',
       branch_name: body.branch_name || 'Print Agent Test',
       order_code: 'TEST-' + Date.now(),
       date: new Date().toLocaleString(),
       cashier: os.hostname(),
-      customer: 'Test Print',
+      server: os.hostname(),
+      customer_name: 'Test Customer',
+      customer_phone: '0000000000',
+      table: 'T1',
+      mode: 'DINE-IN',
       items: [
         { name: 'Receipt printer test', qty: 1, total: 0.00 }
       ],
       subtotal: 0,
-      tax: 0,
+      discount: 0,
+      tax_lines: [
+        { tax_name: 'NHIL', tax_rate: 2.5, amount: 0 },
+        { tax_name: 'TOURISM LEVY', tax_rate: 0, amount: 0 },
+        { tax_name: 'VAT', tax_rate: 0, amount: 0 }
+      ],
+      delivery: 0,
       total: 0,
+      net_total: 0,
       amount_paid: 0,
       balance: 0,
-      footer: 'Print test completed'
+      tracking_url: 'https://deeloserp.com',
+      qr_text: 'https://deeloserp.com',
+      footer: 'THANK YOU.',
+      powered_by: 'POWERED BY DEELOS ERP'
     }
   };
 
   return printJobs({ jobs: [job] }, config);
 }
 
+function parsePrinterUri(uri) {
+  uri = String(uri || '').trim();
+
+  const info = {
+    uri,
+    connection_type: '',
+    ip: '',
+    host: '',
+    port: null
+  };
+
+  if (!uri) return info;
+
+  if (/^(socket|tcp):\/\//i.test(uri)) {
+    info.connection_type = 'network';
+    const match = uri.match(/^(?:socket|tcp):\/\/([^/:\s]+)(?::(\d+))?/i);
+    if (match) {
+      info.host = match[1] || '';
+      info.ip = match[1] || '';
+      info.port = match[2] ? Number(match[2]) : 9100;
+    }
+    return info;
+  }
+
+  if (/^(ipp|ipps|lpd|http|https):\/\//i.test(uri)) {
+    info.connection_type = 'network';
+    try {
+      const u = new URL(uri);
+      info.host = u.hostname || '';
+      info.ip = u.hostname || '';
+      info.port = u.port ? Number(u.port) : null;
+    } catch (e) {}
+    return info;
+  }
+
+  if (/^(usb|dnssd|mdns):/i.test(uri)) {
+    info.connection_type = 'usb';
+    return info;
+  }
+
+  return info;
+}
+
+function parseLpstatPrinters(printerStdout, uriStdout) {
+  const printers = String(printerStdout || '')
+    .split('\n')
+    .map(line => {
+      const match = line.match(/^printer\s+(\S+)/i);
+      return match ? match[1] : null;
+    })
+    .filter(Boolean);
+
+  const uriMap = {};
+  String(uriStdout || '')
+    .split('\n')
+    .forEach(line => {
+      const match = line.match(/^device\s+for\s+(\S+):\s+(.+)$/i);
+      if (match) uriMap[match[1]] = match[2].trim();
+    });
+
+  return printers.map(name => {
+    const uri = uriMap[name] || '';
+    const parsed = parsePrinterUri(uri);
+
+    return {
+      name,
+      source: 'lpstat',
+      connection_type: parsed.connection_type || '',
+      uri: parsed.uri || '',
+      ip: parsed.ip || '',
+      host: parsed.host || '',
+      port: parsed.port || null
+    };
+  });
+}
+
 async function listPrinters() {
   if (process.platform === 'darwin' || process.platform === 'linux') {
     try {
-      const result = await runCommand('lpstat', ['-p']);
-      const names = String(result.stdout || '')
-        .split('\n')
-        .map(line => {
-          const match = line.match(/^printer\s+(\S+)/i);
-          return match ? match[1] : null;
-        })
-        .filter(Boolean);
+      const printersResult = await runCommand('lpstat', ['-p']);
+      let uriStdout = '';
 
-      return names.map(name => ({ name, source: 'lpstat' }));
+      try {
+        const uriResult = await runCommand('lpstat', ['-v']);
+        uriStdout = uriResult.stdout || '';
+      } catch (e) {
+        uriStdout = '';
+      }
+
+      return parseLpstatPrinters(printersResult.stdout || '', uriStdout);
     } catch (err) {
       return [];
     }
@@ -277,14 +371,34 @@ async function listPrinters() {
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
         '-Command',
-        'Get-Printer | Select-Object -ExpandProperty Name'
+        '$ports = Get-PrinterPort | Select-Object Name,PrinterHostAddress,PortNumber; ' +
+        '$printers = Get-Printer | Select-Object Name,PortName,DriverName,Shared; ' +
+        '$rows = foreach ($p in $printers) { ' +
+        '  $port = $ports | Where-Object { $_.Name -eq $p.PortName } | Select-Object -First 1; ' +
+        '  [PSCustomObject]@{ Name=$p.Name; PortName=$p.PortName; DriverName=$p.DriverName; Shared=$p.Shared; PrinterHostAddress=$port.PrinterHostAddress; PortNumber=$port.PortNumber } ' +
+        '}; ' +
+        '$rows | ConvertTo-Json -Depth 4'
       ]);
 
-      return String(result.stdout || '')
-        .split(/\r?\n/)
-        .map(s => s.trim())
-        .filter(Boolean)
-        .map(name => ({ name, source: 'Get-Printer' }));
+      const raw = String(result.stdout || '').trim();
+      if (!raw) return [];
+
+      const parsed = JSON.parse(raw);
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+
+      return rows
+        .filter(row => row && row.Name)
+        .map(row => ({
+          name: String(row.Name || ''),
+          source: 'Get-Printer',
+          connection_type: row.PrinterHostAddress ? 'network' : '',
+          port_name: String(row.PortName || ''),
+          driver_name: String(row.DriverName || ''),
+          shared: !!row.Shared,
+          ip: row.PrinterHostAddress ? String(row.PrinterHostAddress || '') : '',
+          host: row.PrinterHostAddress ? String(row.PrinterHostAddress || '') : '',
+          port: row.PortNumber ? Number(row.PortNumber) : null
+        }));
     } catch (err) {
       return [];
     }
