@@ -22,6 +22,8 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
 UninstallDisplayIcon={app}\{#MyAppExeName}
+CloseApplications=no
+RestartApplications=no
 
 [Files]
 Source: "..\..\dist\windows\deelos-print-agent.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -33,7 +35,7 @@ Source: "uninstall-service.ps1"; DestDir: "{app}\service"; Flags: ignoreversion
 Name: "{app}\logs"
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\service\install-service.ps1"""; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\service\install-service.ps1"""; StatusMsg: "Installing Deelos Print Agent auto-start..."; Flags: runhidden waituntilterminated
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\service\uninstall-service.ps1"""; Flags: runhidden waituntilterminated
@@ -41,3 +43,22 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
 [Icons]
 Name: "{group}\Deelos Print Agent Health"; Filename: "http://127.0.0.1:4789/health"
 Name: "{group}\Deelos Print Agent Printers"; Filename: "http://127.0.0.1:4789/printers"
+
+[Code]
+procedure StopOldAgentBeforeInstall();
+var
+  ResultCode: Integer;
+begin
+  Exec('schtasks.exe', '/End /TN DeelosPrintAgent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('schtasks.exe', '/Delete /TN DeelosPrintAgent /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "Stop-Service -Name ''DeelosPrintAgent'' -Force -ErrorAction SilentlyContinue"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('sc.exe', 'delete DeelosPrintAgent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/F /IM deelos-print-agent.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then begin
+    StopOldAgentBeforeInstall();
+  end;
+end;
