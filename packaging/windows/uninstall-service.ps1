@@ -1,16 +1,31 @@
-# Deelos Print Agent Windows service uninstaller
-# Run PowerShell as Administrator.
+# Deelos Print Agent Windows auto-start uninstaller
+# Removes both the new scheduled task and any older Windows service installation.
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "SilentlyContinue"
 
+$InstallDir = "C:\Program Files\Deelos Print Agent"
+$ExePath = Join-Path $InstallDir "deelos-print-agent.exe"
 $ServiceName = "DeelosPrintAgent"
+$TaskName = "DeelosPrintAgent"
 
-$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($existing) {
-  Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-  sc.exe delete $ServiceName | Out-Null
-  Start-Sleep -Seconds 2
-  Write-Host "Deelos Print Agent service removed."
-} else {
-  Write-Host "Deelos Print Agent service was not found."
+Write-Host "[Deelos Print Agent] Removing startup task..."
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+Write-Host "[Deelos Print Agent] Removing old Windows service if present..."
+Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+sc.exe delete $ServiceName | Out-Null
+
+Write-Host "[Deelos Print Agent] Stopping running agent process..."
+$processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  ($_.ExecutablePath -and ($_.ExecutablePath -ieq $ExePath)) -or
+  ($_.CommandLine -and ($_.CommandLine -like "*$ExePath*"))
 }
+
+foreach ($p in $processes) {
+  try {
+    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+  } catch {}
+}
+
+Write-Host "[Deelos Print Agent] Removed."
