@@ -1,31 +1,40 @@
 # Deelos Print Agent Windows auto-start uninstaller
-# Removes both the new scheduled task and any older Windows service installation.
 
-$ErrorActionPreference = "SilentlyContinue"
+param(
+  [string]$InstallDir = "C:\Program Files\Deelos Print Agent"
+)
 
-$InstallDir = "C:\Program Files\Deelos Print Agent"
+$TaskBoot = "DeelosPrintAgent"
+$TaskLogon = "DeelosPrintAgentLogon"
+$RegRunPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+$RegRunName = "DeelosPrintAgent"
 $ExePath = Join-Path $InstallDir "deelos-print-agent.exe"
-$ServiceName = "DeelosPrintAgent"
-$TaskName = "DeelosPrintAgent"
+$LauncherPath = Join-Path $InstallDir "run-agent-hidden.vbs"
 
-Write-Host "[Deelos Print Agent] Removing startup task..."
-Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+try { schtasks.exe /End /TN $TaskBoot 2>$null | Out-Null } catch {}
+try { schtasks.exe /End /TN $TaskLogon 2>$null | Out-Null } catch {}
+try { schtasks.exe /Delete /TN $TaskBoot /F 2>$null | Out-Null } catch {}
+try { schtasks.exe /Delete /TN $TaskLogon /F 2>$null | Out-Null } catch {}
 
-Write-Host "[Deelos Print Agent] Removing old Windows service if present..."
-Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-sc.exe delete $ServiceName | Out-Null
+try {
+  Stop-Service -Name "DeelosPrintAgent" -Force -ErrorAction SilentlyContinue
+  sc.exe delete "DeelosPrintAgent" | Out-Null
+} catch {}
 
-Write-Host "[Deelos Print Agent] Stopping running agent process..."
-$processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-  ($_.ExecutablePath -and ($_.ExecutablePath -ieq $ExePath)) -or
-  ($_.CommandLine -and ($_.CommandLine -like "*$ExePath*"))
-}
+try {
+  Remove-ItemProperty -Path $RegRunPath -Name $RegRunName -ErrorAction SilentlyContinue
+} catch {}
 
-foreach ($p in $processes) {
-  try {
-    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-  } catch {}
-}
+try {
+  $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    ($_.Name -ieq "deelos-print-agent.exe") -or
+    ($_.ExecutablePath -and ($_.ExecutablePath -ieq $ExePath)) -or
+    ($_.CommandLine -and ($_.CommandLine -like "*$ExePath*"))
+  }
+  foreach ($p in $processes) {
+    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+  }
+} catch {}
 
-Write-Host "[Deelos Print Agent] Removed."
+try { Remove-Item -Path $LauncherPath -Force -ErrorAction SilentlyContinue } catch {}
+exit 0
