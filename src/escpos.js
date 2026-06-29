@@ -141,6 +141,13 @@ function printMode(mode = 0) {
   return ESC + '!' + String.fromCharCode(mode);
 }
 
+function textSize(widthFactor = 1, heightFactor = 1) {
+  const w = Math.max(1, Math.min(8, Number(widthFactor || 1))) - 1;
+  const h = Math.max(1, Math.min(8, Number(heightFactor || 1))) - 1;
+
+  return GS + '!' + String.fromCharCode((w << 4) | h);
+}
+
 function cut() {
   return GS + 'V' + '\x41' + '\x03';
 }
@@ -209,7 +216,7 @@ function normalizeTaxLine(tax, payload) {
 
 function buildReceipt(job) {
   const payload = job.payload || {};
-  const width = Number(payload.paper_width_chars || (String(job.paper_size || '').includes('58') ? 32 : 42));
+  const width = Number(payload.paper_width_chars || (String(job.paper_size || '').includes('58') ? 32 : 48));
 
   const businessName = firstValue(payload, ['business_name', 'company_name', 'business.name']) || 'DEELOS ERP';
   const businessPhone = firstValue(payload, ['business_phone', 'phone', 'business.phone']);
@@ -226,19 +233,21 @@ function buildReceipt(job) {
 
   let out = '';
   out += init();
-  out += align('left');
 
-  // Bigger and bold, but left aligned so long names still feel like a business header.
+  // Centered professional business header.
+  out += align('center');
   out += bold(true);
-  out += printMode(0x18); // emphasized + double height
-  out += wrapText(businessName, width);
-  out += printMode(0x00);
+  out += textSize(2, 2);
+  out += clean(businessName) + '\n';
+  out += textSize(1, 1);
   out += bold(false);
 
-  if (businessPhone) out += wrapText(businessPhone, width);
-  if (businessEmail) out += wrapText(businessEmail, width);
-  if (businessWebsite) out += wrapText(businessWebsite, width);
-  if (branchName) out += columns('Branch', branchName, width);
+  if (businessPhone) out += center(businessPhone, width);
+  if (businessEmail) out += center(businessEmail, width);
+  if (businessWebsite) out += center(businessWebsite, width);
+  if (branchName) out += center(branchName, width);
+
+  out += align('left');
 
   out += line(width, '=');
   out += bold(true);
@@ -296,11 +305,16 @@ function buildReceipt(job) {
   }
 
   out += line(width, '=');
+  const netTotalValue = firstValue(payload, ['net_total_label', 'total_label']) || moneyLabel(payload, payload.net_total || payload.total || 0, null);
+
+  out += align('center');
   out += bold(true);
-  out += printMode(0x08);
-  out += columns('NET TOTAL', firstValue(payload, ['net_total_label', 'total_label']) || moneyLabel(payload, payload.net_total || payload.total || 0, null), width);
-  out += printMode(0x00);
+  out += textSize(2, 2);
+  out += 'NET TOTAL\n';
+  out += clean(netTotalValue) + '\n';
+  out += textSize(1, 1);
   out += bold(false);
+  out += align('left');
 
   if (payload.amount_paid != null || payload.amount_paid_label) {
     out += columns('Amount Paid', firstValue(payload, ['amount_paid_label']) || moneyLabel(payload, payload.amount_paid, null), width);
@@ -320,12 +334,6 @@ function buildReceipt(job) {
     out += center('TRACK YOUR ORDER ONLINE', width);
     out += bold(false);
     out += center(payload.qr_caption || 'SCAN TO VIEW YOUR LATEST ORDER STATUS', width);
-
-    if (trackingUrl) {
-      out += align('left');
-      out += wrapText(trackingUrl, width);
-      out += align('center');
-    }
 
     if (qrText) {
       out += feed(1);
@@ -350,7 +358,7 @@ function buildReceipt(job) {
 
 function buildKitchenTicket(job) {
   const payload = job.payload || {};
-  const width = payload.paper_width_chars || (String(job.paper_size || '').includes('58') ? 32 : 42);
+  const width = payload.paper_width_chars || (String(job.paper_size || '').includes('58') ? 32 : 48);
 
   let out = '';
   out += init();
