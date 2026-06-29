@@ -242,10 +242,12 @@ function buildReceipt(job) {
   out += textSize(1, 1);
   out += bold(false);
 
-  if (businessPhone) out += center(businessPhone, width);
-  if (businessEmail) out += center(businessEmail, width);
-  if (businessWebsite) out += center(businessWebsite, width);
-  if (branchName) out += center(branchName, width);
+  // Keep the business meta centered by printer alignment, not manual spacing.
+  // This keeps the header block visually centered like the NET TOTAL block.
+  if (businessPhone) out += clean(businessPhone) + '\n';
+  if (businessEmail) out += clean(businessEmail) + '\n';
+  if (businessWebsite) out += clean(businessWebsite) + '\n';
+  if (branchName) out += clean(branchName) + '\n';
 
   out += align('left');
 
