@@ -44,34 +44,23 @@ function currency(payload) {
 }
 
 function currencySymbol(payload) {
-  const direct = strip(payload.currency_symbol || payload.symbol || '');
-  if (direct) return direct;
+  const symbol = strip(payload.currency_symbol || payload.currencySymbol || '');
+  if (symbol) return symbol;
 
   const code = currency(payload).toUpperCase();
-  const map = {
-    GHS: '₵',
-    USD: '$',
-    EUR: '€',
-    GBP: '£',
-    NGN: '₦',
-    XOF: 'CFA',
-    XAF: 'CFA',
-    ZAR: 'R',
-    KES: 'KSh'
-  };
-
-  return map[code] || code;
+  return code === 'GHS' ? '₵' : '';
 }
 
 function moneyLabel(payload, value, fallbackLabel) {
   if (isPresent(fallbackLabel)) return strip(fallbackLabel);
 
   const text = strip(value);
-  if (/^[A-Z]{3}\s+/i.test(text) || /^GHS\s+/i.test(text) || /^₵/.test(text) || /^[₵$€£₦]\s*/.test(text)) {
+  if (/^[A-Z]{3}\s+/i.test(text) || /^GHS\s+/i.test(text) || /^₵/.test(text)) {
     return text;
   }
 
-  return `${currencySymbol(payload)} ${money(value)}`;
+  const symbol = currencySymbol(payload);
+  return `${symbol || currency(payload)} ${money(value)}`;
 }
 
 function center(text, width = 42) {
@@ -128,7 +117,7 @@ function labelValue(label, value, width = 42) {
 function itemLine(item, payload, width = 42) {
   const qty = item.qty || item.quantity || 1;
   const name = strip(item.name || item.product_name || item.description || 'Item');
-  const amount = item.total_label || item.line_total_label || item.amount_label || null;
+  const amount = item.total_symbol_label || item.line_total_symbol_label || item.amount_symbol_label || item.total_label || item.line_total_label || item.amount_label || null;
   const rawAmount = item.total ?? item.line_total ?? item.amount ?? item.line_total_cents;
   const right = amount ? strip(amount) : moneyLabel(payload, rawAmount, null);
 
@@ -220,7 +209,7 @@ function firstValue(payload, keys) {
 function normalizeTaxLine(tax, payload) {
   const name = strip(tax.name || tax.tax_name || tax.label || tax.tax_code || tax.code || 'Tax');
   const rate = firstValue(tax, ['rate', 'tax_rate', 'rate_pct', 'percentage']);
-  const amountLabel = firstValue(tax, ['amount_label', 'tax_amount_label', 'total_label']);
+  const amountLabel = firstValue(tax, ['amount_symbol_label', 'tax_amount_symbol_label', 'total_symbol_label', 'amount_label', 'tax_amount_label', 'total_label']);
   const amount = firstValue(tax, ['amount', 'tax_amount', 'total', 'amount_cents', 'tax_amount_cents']);
 
   let label = name;
@@ -297,9 +286,9 @@ function buildReceipt(job) {
   }
 
   out += line(width);
-  out += labelValue('Subtotal', firstValue(payload, ['subtotal_label']) || moneyLabel(payload, payload.subtotal, null), width);
+  out += labelValue('Subtotal', firstValue(payload, ['subtotal_symbol_label', 'subtotal_label']) || moneyLabel(payload, payload.subtotal, null), width);
 
-  const discountValue = firstValue(payload, ['discount_label']) || moneyLabel(payload, payload.discount, null);
+  const discountValue = firstValue(payload, ['discount_symbol_label', 'discount_label']) || moneyLabel(payload, payload.discount, null);
   if (num(payload.discount) > 0 || payload.discount_label) out += columns('Discount', discountValue, width);
 
   const taxes = Array.isArray(payload.tax_lines) ? payload.tax_lines
@@ -318,10 +307,10 @@ function buildReceipt(job) {
       out += columns(row.label, row.amount, width);
     });
   } else if (num(payload.tax) > 0 || payload.tax_label) {
-    out += columns('Tax', firstValue(payload, ['tax_label']) || moneyLabel(payload, payload.tax, null), width);
+    out += columns('Tax', firstValue(payload, ['tax_symbol_label', 'tax_label']) || moneyLabel(payload, payload.tax, null), width);
   }
 
-  const deliveryValue = firstValue(payload, ['delivery_label', 'delivery_fee_label']) || moneyLabel(payload, payload.delivery || payload.delivery_fee, null);
+  const deliveryValue = firstValue(payload, ['delivery_symbol_label', 'delivery_fee_symbol_label', 'delivery_label', 'delivery_fee_label']) || moneyLabel(payload, payload.delivery || payload.delivery_fee, null);
   if (num(payload.delivery || payload.delivery_fee) > 0 || payload.delivery_label || payload.delivery_fee_label) {
     out += columns('Delivery Fee', deliveryValue, width);
   }
@@ -339,11 +328,11 @@ function buildReceipt(job) {
   out += align('left');
 
   if (payload.amount_paid != null || payload.amount_paid_label) {
-    out += columns('Amount Paid', firstValue(payload, ['amount_paid_label']) || moneyLabel(payload, payload.amount_paid, null), width);
+    out += columns('Amount Paid', firstValue(payload, ['amount_paid_symbol_label', 'amount_paid_label']) || moneyLabel(payload, payload.amount_paid, null), width);
   }
 
   if (payload.balance != null || payload.balance_label) {
-    out += columns('Balance', firstValue(payload, ['balance_label']) || moneyLabel(payload, payload.balance, null), width);
+    out += columns('Balance', firstValue(payload, ['balance_symbol_label', 'balance_label']) || moneyLabel(payload, payload.balance, null), width);
   }
 
   const trackingUrl = firstValue(payload, ['tracking_url', 'track_url', 'qr_text']);
@@ -353,8 +342,11 @@ function buildReceipt(job) {
     out += line(width);
     out += align('center');
     out += bold(true);
-    out += center('TRACK YOUR ORDER ONLINE', width);
+    // Use printer hardware center alignment only. Do not add manual spaces here.
+    // Manual spaces plus ESC/POS center alignment can make this line look shifted.
+    out += clean('TRACK YOUR ORDER ONLINE') + '\n';
     out += bold(false);
+
     if (qrText) {
       out += feed(1);
       out += qrCode(qrText);
@@ -367,13 +359,13 @@ function buildReceipt(job) {
   out += line(width);
   out += align('center');
   out += bold(true);
-  out += center(payload.footer || 'THANK YOU.', width);
+  out += clean(payload.footer || 'THANK YOU.') + '\n';
   out += bold(false);
-  out += center(payload.powered_by || 'POWERED BY DEELOS ERP', width);
+  out += clean(payload.powered_by || 'POWERED BY DEELOS ERP') + '\n';
   out += feed(3);
   out += cut();
 
-  return Buffer.from(out, 'binary');
+  return Buffer.from(out, 'utf8');
 }
 
 function buildKitchenTicket(job) {
@@ -420,7 +412,7 @@ function buildKitchenTicket(job) {
   out += feed(3);
   out += cut();
 
-  return Buffer.from(out, 'binary');
+  return Buffer.from(out, 'utf8');
 }
 
 function buildText(job) {
