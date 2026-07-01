@@ -43,15 +43,35 @@ function currency(payload) {
   return strip(payload.currency || payload.currency_code || 'GHS') || 'GHS';
 }
 
+function currencySymbol(payload) {
+  const direct = strip(payload.currency_symbol || payload.symbol || '');
+  if (direct) return direct;
+
+  const code = currency(payload).toUpperCase();
+  const map = {
+    GHS: '₵',
+    USD: '$',
+    EUR: '€',
+    GBP: '£',
+    NGN: '₦',
+    XOF: 'CFA',
+    XAF: 'CFA',
+    ZAR: 'R',
+    KES: 'KSh'
+  };
+
+  return map[code] || code;
+}
+
 function moneyLabel(payload, value, fallbackLabel) {
   if (isPresent(fallbackLabel)) return strip(fallbackLabel);
 
   const text = strip(value);
-  if (/^[A-Z]{3}\s+/i.test(text) || /^GHS\s+/i.test(text) || /^₵/.test(text)) {
+  if (/^[A-Z]{3}\s+/i.test(text) || /^GHS\s+/i.test(text) || /^₵/.test(text) || /^[₵$€£₦]\s*/.test(text)) {
     return text;
   }
 
-  return `${currency(payload)} ${money(value)}`;
+  return `${currencySymbol(payload)} ${money(value)}`;
 }
 
 function center(text, width = 42) {
@@ -307,7 +327,7 @@ function buildReceipt(job) {
   }
 
   out += line(width, '=');
-  const netTotalValue = firstValue(payload, ['net_total_label', 'total_label']) || moneyLabel(payload, payload.net_total || payload.total || 0, null);
+  const netTotalValue = firstValue(payload, ['net_total_symbol_label', 'total_symbol_label', 'net_total_label', 'total_label']) || moneyLabel(payload, payload.net_total || payload.total || 0, null);
 
   out += align('center');
   out += bold(true);
@@ -335,8 +355,6 @@ function buildReceipt(job) {
     out += bold(true);
     out += center('TRACK YOUR ORDER ONLINE', width);
     out += bold(false);
-    out += center(payload.qr_caption || 'SCAN TO VIEW YOUR LATEST ORDER STATUS', width);
-
     if (qrText) {
       out += feed(1);
       out += qrCode(qrText);
