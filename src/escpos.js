@@ -36,39 +36,12 @@ function num(value) {
 }
 
 function money(value) {
-  return num(value).toFixed(2);
+  return num(value).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
 
-function currency(payload) {
-  return strip(payload.currency || payload.currency_code || 'GHS') || 'GHS';
-}
-
-function currencySymbol(payload) {
-  const symbol = strip(payload.currency_symbol || payload.currencySymbol || '');
-  if (symbol) return symbol;
-
-  const code = currency(payload).toUpperCase();
-  return code === 'GHS' ? '₵' : '';
-}
-
-
-function currencySymbolSupported(payload) {
-  /*
-  |--------------------------------------------------------------------------
-  | Currency symbol safety
-  |--------------------------------------------------------------------------
-  | Most ESC/POS printers do not support the Ghana cedi symbol in text mode.
-  | We therefore DO NOT print the symbol unless the payload explicitly says
-  | it is supported. This prevents ₵ from becoming a Chinese-looking character.
-  |
-  | To enable symbol printing later for a tested printer, send:
-  | currency_symbol_supported: true
-  */
-  return payload.currency_symbol_supported === true ||
-    payload.currencySymbolSupported === true ||
-    payload.enable_currency_symbol === true ||
-    payload.enableCurrencySymbol === true;
-}
 
 function extractMoneyNumber(value) {
   const text = strip(value);
@@ -90,19 +63,10 @@ function moneyPlain(value, fallbackLabel) {
   return money(value);
 }
 
-function moneyNetTotalLabel(payload, value, fallbackLabel) {
-  const amount = moneyPlain(value, fallbackLabel);
-
-  if (!currencySymbolSupported(payload)) {
-    return amount;
-  }
-
-  const symbol = currencySymbol(payload);
-  return symbol ? `${symbol} ${amount}` : amount;
-}
 
 function moneyLabel(payload, value, fallbackLabel) {
-  // Normal rows should print numbers only. Currency is handled only in the big NET TOTAL.
+  // Thermal printers can misread unsupported currency symbols.
+  // Keep receipt amount rows numeric only.
   return moneyPlain(value, fallbackLabel);
 }
 
@@ -162,7 +126,7 @@ function itemLine(item, payload, width = 42) {
   const name = strip(item.name || item.product_name || item.description || 'Item');
   const amount = item.total_symbol_label || item.line_total_symbol_label || item.amount_symbol_label || item.total_label || item.line_total_label || item.amount_label || null;
   const rawAmount = item.total ?? item.line_total ?? item.amount ?? item.line_total_cents;
-  const right = amount ? strip(amount) : moneyLabel(payload, rawAmount, null);
+  const right = moneyPlain(rawAmount, amount);
 
   const left = `${qty} x ${name}`;
 
@@ -262,7 +226,7 @@ function normalizeTaxLine(tax, payload) {
 
   return {
     label,
-    amount: amountLabel ? strip(amountLabel) : moneyLabel(payload, amount, null)
+    amount: moneyPlain(amount, amountLabel)
   };
 }
 
@@ -329,9 +293,9 @@ function buildReceipt(job) {
   }
 
   out += line(width);
-  out += labelValue('Subtotal', firstValue(payload, ['subtotal_symbol_label', 'subtotal_label']) || moneyLabel(payload, payload.subtotal, null), width);
+  out += labelValue('Subtotal', moneyPlain(payload.subtotal, firstValue(payload, ['subtotal_label'])), width);
 
-  const discountValue = firstValue(payload, ['discount_symbol_label', 'discount_label']) || moneyLabel(payload, payload.discount, null);
+  const discountValue = moneyPlain(payload.discount, firstValue(payload, ['discount_label']));
   if (num(payload.discount) > 0 || payload.discount_label) out += columns('Discount', discountValue, width);
 
   const taxes = Array.isArray(payload.tax_lines) ? payload.tax_lines
@@ -350,36 +314,32 @@ function buildReceipt(job) {
       out += columns(row.label, row.amount, width);
     });
   } else if (num(payload.tax) > 0 || payload.tax_label) {
-    out += columns('Tax', firstValue(payload, ['tax_symbol_label', 'tax_label']) || moneyLabel(payload, payload.tax, null), width);
+    out += columns('Tax', moneyPlain(payload.tax, firstValue(payload, ['tax_label'])), width);
   }
 
-  const deliveryValue = firstValue(payload, ['delivery_symbol_label', 'delivery_fee_symbol_label', 'delivery_label', 'delivery_fee_label']) || moneyLabel(payload, payload.delivery || payload.delivery_fee, null);
+  const deliveryValue = moneyPlain(payload.delivery || payload.delivery_fee, firstValue(payload, ['delivery_label', 'delivery_fee_label']));
   if (num(payload.delivery || payload.delivery_fee) > 0 || payload.delivery_label || payload.delivery_fee_label) {
     out += columns('Delivery Fee', deliveryValue, width);
   }
 
   out += line(width, '=');
-  const netTotalValue = moneyNetTotalLabel(
-    payload,
-    payload.net_total || payload.total || 0,
-    firstValue(payload, ['net_total_symbol_label', 'total_symbol_label', 'net_total_label', 'total_label'])
-  );
+  const netTotalValue = moneyPlain(payload.net_total || payload.total || 0, firstValue(payload, ['net_total_label', 'total_label']));
 
   out += align('center');
   out += bold(true);
   out += textSize(2, 2);
-  out += clean('NET TOTAL') + '\n';
+  out += 'NET TOTAL\n';
   out += clean(netTotalValue) + '\n';
   out += textSize(1, 1);
   out += bold(false);
   out += align('left');
 
   if (payload.amount_paid != null || payload.amount_paid_label) {
-    out += columns('Amount Paid', firstValue(payload, ['amount_paid_symbol_label', 'amount_paid_label']) || moneyLabel(payload, payload.amount_paid, null), width);
+    out += columns('Amount Paid', moneyPlain(payload.amount_paid, firstValue(payload, ['amount_paid_label'])), width);
   }
 
   if (payload.balance != null || payload.balance_label) {
-    out += columns('Balance', firstValue(payload, ['balance_symbol_label', 'balance_label']) || moneyLabel(payload, payload.balance, null), width);
+    out += columns('Balance', moneyPlain(payload.balance, firstValue(payload, ['balance_label'])), width);
   }
 
   const trackingUrl = firstValue(payload, ['tracking_url', 'track_url', 'qr_text']);
@@ -389,8 +349,9 @@ function buildReceipt(job) {
     out += line(width);
     out += align('center');
     out += bold(true);
-    out += clean('TRACK YOUR ORDER ONLINE') + '
-';
+    // Use printer hardware center alignment only. Do not add manual spaces here.
+    // Manual spaces plus ESC/POS center alignment can make this line look shifted.
+    out += clean('TRACK YOUR ORDER ONLINE') + '\n';
     out += bold(false);
 
     if (qrText) {
@@ -405,11 +366,9 @@ function buildReceipt(job) {
   out += line(width);
   out += align('center');
   out += bold(true);
-  out += clean(payload.footer || 'THANK YOU.') + '
-';
+  out += clean(payload.footer || 'THANK YOU.') + '\n';
   out += bold(false);
-  out += clean(payload.powered_by || 'POWERED BY DEELOS ERP') + '
-';
+  out += clean(payload.powered_by || 'POWERED BY DEELOS ERP') + '\n';
   out += feed(3);
   out += cut();
 
