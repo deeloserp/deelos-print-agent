@@ -64,6 +64,36 @@ function moneyPlain(value, fallbackLabel) {
 }
 
 
+function receiptCurrencyPrefix(payload) {
+  /*
+  |--------------------------------------------------------------------------
+  | Currency on receipt
+  |--------------------------------------------------------------------------
+  | Normal receipt rows stay numeric only.
+  | The currency prefix is printed only on the big NET TOTAL.
+  | Prefer the payload symbol/code, but default to GHS for safe printer text.
+  */
+  const prefix = strip(
+    payload.net_total_currency_symbol ||
+    payload.total_currency_symbol ||
+    payload.currency_symbol ||
+    payload.currencySymbol ||
+    payload.currency_code ||
+    payload.currency ||
+    'GHS'
+  );
+
+  return prefix || 'GHS';
+}
+
+function moneyNetTotal(payload, value, fallbackLabel) {
+  const prefix = receiptCurrencyPrefix(payload);
+  const amount = moneyPlain(value, fallbackLabel);
+
+  return prefix ? `${prefix} ${amount}` : amount;
+}
+
+
 function moneyLabel(payload, value, fallbackLabel) {
   // Thermal printers can misread unsupported currency symbols.
   // Keep receipt amount rows numeric only.
@@ -124,7 +154,7 @@ function labelValue(label, value, width = 42) {
 function itemLine(item, payload, width = 42) {
   const qty = item.qty || item.quantity || 1;
   const name = strip(item.name || item.product_name || item.description || 'Item');
-  const amount = item.total_symbol_label || item.line_total_symbol_label || item.amount_symbol_label || item.total_label || item.line_total_label || item.amount_label || null;
+  const amount = item.total_label || item.line_total_label || item.amount_label || null;
   const rawAmount = item.total ?? item.line_total ?? item.amount ?? item.line_total_cents;
   const right = moneyPlain(rawAmount, amount);
 
@@ -216,7 +246,7 @@ function firstValue(payload, keys) {
 function normalizeTaxLine(tax, payload) {
   const name = strip(tax.name || tax.tax_name || tax.label || tax.tax_code || tax.code || 'Tax');
   const rate = firstValue(tax, ['rate', 'tax_rate', 'rate_pct', 'percentage']);
-  const amountLabel = firstValue(tax, ['amount_symbol_label', 'tax_amount_symbol_label', 'total_symbol_label', 'amount_label', 'tax_amount_label', 'total_label']);
+  const amountLabel = firstValue(tax, ['amount_label', 'tax_amount_label', 'total_label']);
   const amount = firstValue(tax, ['amount', 'tax_amount', 'total', 'amount_cents', 'tax_amount_cents']);
 
   let label = name;
@@ -323,7 +353,7 @@ function buildReceipt(job) {
   }
 
   out += line(width, '=');
-  const netTotalValue = moneyPlain(payload.net_total || payload.total || 0, firstValue(payload, ['net_total_label', 'total_label']));
+  const netTotalValue = moneyNetTotal(payload, payload.net_total || payload.total || 0, firstValue(payload, ['net_total_symbol_label', 'total_symbol_label', 'net_total_label', 'total_label']));
 
   out += align('center');
   out += bold(true);
