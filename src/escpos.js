@@ -381,7 +381,7 @@ function buildReceipt(job) {
     out += bold(true);
     // Use printer hardware center alignment only. Do not add manual spaces here.
     // Manual spaces plus ESC/POS center alignment can make this line look shifted.
-    out += clean('TRACK YOUR ORDER ONLINE') + '\n';
+    out += clean('') + '\n';// TRACK YOUR ORDER ONLINE
     out += bold(false);
 
     if (qrText) {
