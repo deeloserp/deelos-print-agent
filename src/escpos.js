@@ -64,34 +64,6 @@ function moneyPlain(value, fallbackLabel) {
 }
 
 
-function receiptCurrencyPrefix(payload) {
-  /*
-  |--------------------------------------------------------------------------
-  | Currency on receipt
-  |--------------------------------------------------------------------------
-  | Normal receipt rows stay numeric only.
-  | The currency prefix is printed only on the big NET TOTAL.
-  | Prefer the payload symbol/code, but default to GHS for safe printer text.
-  */
-  const prefix = strip(
-    payload.net_total_currency_symbol ||
-    payload.total_currency_symbol ||
-    payload.currency_symbol ||
-    payload.currencySymbol ||
-    payload.currency_code ||
-    payload.currency ||
-    'GHS'
-  );
-
-  return prefix || 'GHS';
-}
-
-function moneyNetTotal(payload, value, fallbackLabel) {
-  const prefix = receiptCurrencyPrefix(payload);
-  const amount = moneyPlain(value, fallbackLabel);
-
-  return prefix ? `${prefix} ${amount}` : amount;
-}
 
 
 function moneyLabel(payload, value, fallbackLabel) {
@@ -353,7 +325,7 @@ function buildReceipt(job) {
   }
 
   out += line(width, '=');
-  const netTotalValue = moneyNetTotal(payload, payload.net_total || payload.total || 0, firstValue(payload, ['net_total_symbol_label', 'total_symbol_label', 'net_total_label', 'total_label']));
+  const netTotalValue = moneyPlain(payload.net_total || payload.total || 0, firstValue(payload, ['net_total_label', 'total_label']));
 
   out += align('center');
   out += bold(true);
