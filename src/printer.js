@@ -7,6 +7,179 @@ const { execFile } = require('child_process');
 const { buildText } = require('./escpos');
 const { logInfo, logError } = require('./utils');
 
+
+const WINDOWS_RAW_HELPER_VERSION = '2026-07-11-v1';
+
+const WINDOWS_RAW_HELPER_SCRIPT = String.raw`param(
+  [Parameter(Mandatory = $true)]
+  [string]$PrinterName,
+
+  [Parameter(Mandatory = $true)]
+  [string]$FilePath,
+
+  [string]$DocumentName = 'Deelos Receipt'
+)
+
+$ErrorActionPreference = 'Stop'
+
+$source = @"
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+
+namespace Deelos.Printing
+{
+    public static class RawPrinter
+    {
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private class DOC_INFO_1
+        {
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string pDocName;
+
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string pOutputFile;
+
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string pDataType;
+        }
+
+        [DllImport("winspool.drv", EntryPoint = "OpenPrinterW", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool OpenPrinter(string printerName, out IntPtr printerHandle, IntPtr defaults);
+
+        [DllImport("winspool.drv", EntryPoint = "StartDocPrinterW", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern int StartDocPrinter(IntPtr printerHandle, int level, [In] DOC_INFO_1 docInfo);
+
+        [DllImport("winspool.drv", SetLastError = true)]
+        private static extern bool StartPagePrinter(IntPtr printerHandle);
+
+        [DllImport("winspool.drv", SetLastError = true)]
+        private static extern bool WritePrinter(IntPtr printerHandle, IntPtr bytes, int count, out int written);
+
+        [DllImport("winspool.drv", SetLastError = true)]
+        private static extern bool EndPagePrinter(IntPtr printerHandle);
+
+        [DllImport("winspool.drv", SetLastError = true)]
+        private static extern bool EndDocPrinter(IntPtr printerHandle);
+
+        [DllImport("winspool.drv", SetLastError = true)]
+        private static extern bool ClosePrinter(IntPtr printerHandle);
+
+        private static void ThrowLastError(string action)
+        {
+            int errorCode = Marshal.GetLastWin32Error();
+            throw new Win32Exception(errorCode, action + " failed with Windows error " + errorCode + ".");
+        }
+
+        public static int SendFile(string printerName, string filePath, string documentName)
+        {
+            if (String.IsNullOrWhiteSpace(printerName))
+                throw new ArgumentException("Printer name is required.", "printerName");
+
+            if (String.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                throw new FileNotFoundException("The RAW print file was not found.", filePath);
+
+            byte[] data = File.ReadAllBytes(filePath);
+            IntPtr printerHandle = IntPtr.Zero;
+            IntPtr unmanagedData = IntPtr.Zero;
+            bool documentStarted = false;
+            bool pageStarted = false;
+            int jobId = 0;
+
+            if (!OpenPrinter(printerName, out printerHandle, IntPtr.Zero))
+                ThrowLastError("OpenPrinter");
+
+            try
+            {
+                DOC_INFO_1 docInfo = new DOC_INFO_1
+                {
+                    pDocName = String.IsNullOrWhiteSpace(documentName) ? "Deelos Receipt" : documentName,
+                    pOutputFile = null,
+                    pDataType = "RAW"
+                };
+
+                jobId = StartDocPrinter(printerHandle, 1, docInfo);
+                if (jobId == 0)
+                    ThrowLastError("StartDocPrinter");
+
+                documentStarted = true;
+
+                if (!StartPagePrinter(printerHandle))
+                    ThrowLastError("StartPagePrinter");
+
+                pageStarted = true;
+
+                if (data.Length > 0)
+                {
+                    unmanagedData = Marshal.AllocHGlobal(data.Length);
+                    Marshal.Copy(data, 0, unmanagedData, data.Length);
+
+                    int written;
+                    if (!WritePrinter(printerHandle, unmanagedData, data.Length, out written))
+                        ThrowLastError("WritePrinter");
+
+                    if (written != data.Length)
+                    {
+                        throw new IOException(
+                            "Windows accepted only " + written + " of " + data.Length + " RAW print bytes."
+                        );
+                    }
+                }
+
+                return jobId;
+            }
+            finally
+            {
+                if (unmanagedData != IntPtr.Zero)
+                    Marshal.FreeHGlobal(unmanagedData);
+
+                if (pageStarted)
+                    EndPagePrinter(printerHandle);
+
+                if (documentStarted)
+                    EndDocPrinter(printerHandle);
+
+                if (printerHandle != IntPtr.Zero)
+                    ClosePrinter(printerHandle);
+            }
+        }
+    }
+}
+"@
+
+try {
+  Add-Type -TypeDefinition $source -Language CSharp
+  $jobId = [Deelos.Printing.RawPrinter]::SendFile($PrinterName, $FilePath, $DocumentName)
+  Write-Output ("RAW print job submitted. Job ID: " + $jobId)
+  exit 0
+} catch {
+  Write-Error $_.Exception.Message
+  exit 1
+}
+`;
+
+function ensureWindowsRawPrintHelper() {
+  const fs = require('fs');
+  const path = require('path');
+  const helperPath = path.join(
+    os.tmpdir(),
+    `deelos-raw-print-helper-${WINDOWS_RAW_HELPER_VERSION}.ps1`
+  );
+
+  let current = '';
+
+  try {
+    current = fs.readFileSync(helperPath, 'utf8');
+  } catch (e) {}
+
+  if (current !== WINDOWS_RAW_HELPER_SCRIPT) {
+    fs.writeFileSync(helperPath, WINDOWS_RAW_HELPER_SCRIPT, 'utf8');
+  }
+
+  return helperPath;
+}
+
 function normalizeJobs(body) {
   if (Array.isArray(body.jobs)) return body.jobs;
   if (body.job && typeof body.job === 'object') return [body.job];
@@ -103,19 +276,33 @@ async function writeLocalPrinter(buffer, station) {
   if (process.platform === 'win32') {
     const fs = require('fs');
     const path = require('path');
-    const tmp = path.join(os.tmpdir(), `deelos-print-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`);
+    const tmp = path.join(
+      os.tmpdir(),
+      `deelos-print-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`
+    );
+    const helperPath = ensureWindowsRawPrintHelper();
+    const documentName = `Deelos ${String(station.printer_role || 'receipt')} ${new Date().toISOString()}`;
 
     fs.writeFileSync(tmp, buffer);
 
     try {
-      await runCommand('powershell.exe', [
+      const result = await runCommand('powershell.exe', [
+        '-NoLogo',
         '-NoProfile',
+        '-NonInteractive',
         '-ExecutionPolicy', 'Bypass',
-        '-Command',
-        `Get-Content -LiteralPath "${tmp.replace(/"/g, '\\"')}" -Encoding Byte | Out-Printer -Name "${printerName.replace(/"/g, '\\"')}"`
+        '-File', helperPath,
+        '-PrinterName', printerName,
+        '-FilePath', tmp,
+        '-DocumentName', documentName
       ]);
 
-      return { ok: true, transport: 'windows-out-printer', printer_name: printerName };
+      return {
+        ok: true,
+        transport: 'windows-raw-spooler',
+        printer_name: printerName,
+        message: String(result.stdout || '').trim()
+      };
     } finally {
       try { fs.unlinkSync(tmp); } catch (e) {}
     }
