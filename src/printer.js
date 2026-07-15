@@ -281,7 +281,8 @@ async function writeLocalPrinter(buffer, station) {
       `deelos-print-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`
     );
     const helperPath = ensureWindowsRawPrintHelper();
-    const documentName = `Deelos ${String(station.printer_role || 'receipt')} ${new Date().toISOString()}`;
+    const jobName = String(station.document_name || station.printer_role || 'receipt');
+    const documentName = `Deelos ${jobName} ${new Date().toISOString()}`;
 
     fs.writeFileSync(tmp, buffer);
 
@@ -337,6 +338,7 @@ function resolveStation(job) {
     printer_ip: station.printer_ip || job.printer_ip || '',
     printer_port: station.printer_port || job.printer_port || 9100,
     paper_size: station.paper_size || job.paper_size || '80mm',
+    document_name: station.document_name || (String(job.type || '').toLowerCase().includes('label') ? 'Product Labels' : ''),
     copies: Number(station.copies || job.copies || 1)
   };
 }
