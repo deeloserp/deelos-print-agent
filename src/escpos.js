@@ -64,8 +64,6 @@ function moneyPlain(value, fallbackLabel) {
 }
 
 
-
-
 function moneyLabel(payload, value, fallbackLabel) {
   // Thermal printers can misread unsupported currency symbols.
   // Keep receipt amount rows numeric only.
@@ -193,6 +191,181 @@ function qrCode(text) {
   out += GS + '(k' + '\x03\x00' + '1Q0';
 
   return out;
+}
+
+
+
+function fullCut(feedDots = 3) {
+  const dots = Math.max(0, Math.min(255, Number(feedDots || 0)));
+  return GS + 'V' + '\x41' + String.fromCharCode(dots);
+}
+
+function partialCut(feedDots = 3) {
+  const dots = Math.max(0, Math.min(255, Number(feedDots || 0)));
+  return GS + 'V' + '\x42' + String.fromCharCode(dots);
+}
+
+function barcodeCode128(value, options = {}) {
+  let data = strip(value).replace(/[^\x20-\x7E]/g, '');
+  if (!data) return '';
+
+  // ESC/POS Code 128 requires an explicit code set. Code Set B covers
+  // normal Deelos alphanumeric scan codes safely.
+  if (!data.startsWith('{A') && !data.startsWith('{B') && !data.startsWith('{C')) {
+    data = '{B' + data;
+  }
+
+  if (data.length > 255) data = data.slice(0, 255);
+
+  const moduleWidth = Math.max(2, Math.min(6, Number(options.module_width || 2)));
+  const height = Math.max(24, Math.min(180, Number(options.height || 56)));
+  const hri = options.hri === true ? 2 : 0;
+
+  let out = '';
+  out += GS + 'w' + String.fromCharCode(moduleWidth);
+  out += GS + 'h' + String.fromCharCode(height);
+  out += GS + 'H' + String.fromCharCode(hri);
+  out += GS + 'k' + String.fromCharCode(73) + String.fromCharCode(data.length) + data;
+  out += '\n';
+  return out;
+}
+
+function boolOption(options, key, fallback = false) {
+  if (!options || !Object.prototype.hasOwnProperty.call(options, key)) return fallback;
+  const value = options[key];
+  if (typeof value === 'boolean') return value;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+}
+
+function labelTypeName(value) {
+  switch (String(value || '').toLowerCase()) {
+    case 'price_tag': return 'PRICE TAG';
+    case 'carton': return 'CARTON / PACK';
+    case 'batch': return 'BATCH LABEL';
+    case 'serial': return 'SERIAL ITEM';
+    default: return 'PRODUCT LABEL';
+  }
+}
+
+function buildProductLabels(job) {
+  const payload = job.payload || {};
+  const batch = payload.batch || {};
+  const template = payload.template || {};
+  const printOptions = payload.print_options || {};
+  const display = template.display_options || batch.display_options || {};
+  const items = Array.isArray(payload.items) ? payload.items : [];
+
+  const paperSize = String(job.paper_size || printOptions.paper_size || template.fallback_paper_size || '80mm');
+  const printerWidthMm = Number(template.printer_width_mm || template.label_width_mm || (paperSize.includes('58') ? 58 : 80));
+  const width = printerWidthMm <= 58 ? 32 : 48;
+  const labelHeightMm = Math.max(15, Number(template.label_height_mm || 30));
+  const barcodeHeight = Math.max(32, Math.min(90, Math.round(labelHeightMm * 1.65)));
+
+  const businessName = firstValue(payload, ['business.name', 'business_name', 'company_name']) || 'DEELOS ERP';
+  const branchName = firstValue(payload, ['branch.name', 'branch_name']);
+  const currency = firstValue(payload, ['currency', 'business.currency']) || 'GHS';
+
+  const cutEach = boolOption(printOptions, 'cut_each_label', boolOption(template, 'cut_each_label', true));
+  const cutMode = String(printOptions.cut_mode || (cutEach ? 'after_each_label' : 'after_batch')).toLowerCase();
+  const cutType = String(printOptions.cut_type || 'full').toLowerCase();
+  const feedBeforeCut = Math.max(0, Math.min(8, Number(printOptions.feed_before_cut ?? 3)));
+  const feedAfterLabel = Math.max(0, Math.min(8, Number(printOptions.feed_after_label ?? 0)));
+
+  const cutCommand = () => cutType === 'partial' ? partialCut(3) : fullCut(3);
+
+  let out = init();
+
+  items.forEach((item, itemIndex) => {
+    const product = item.product || {};
+    const copies = Math.max(1, Number(item.copies || 1));
+    const scanCode = strip(item.scan_code || item.barcode_value || product.barcode || product.sku);
+
+    for (let copyIndex = 0; copyIndex < copies; copyIndex++) {
+      out += align('center');
+      out += printMode(0);
+      out += textSize(1, 1);
+
+      if (boolOption(display, 'show_business_name', false)) {
+        out += bold(true);
+        out += clean(businessName).slice(0, width) + '\n';
+        out += bold(false);
+        if (branchName) out += clean(branchName).slice(0, width) + '\n';
+      }
+
+      if (boolOption(display, 'show_label_type', false)) {
+        out += clean(labelTypeName(item.label_type || batch.label_type)) + '\n';
+      }
+
+      if (boolOption(display, 'show_product_name', true)) {
+        out += bold(true);
+        out += wrapText(product.name || 'Product', width, '');
+        out += bold(false);
+      }
+
+      if (boolOption(display, 'show_brand', false) && product.brand) {
+        out += clean('Brand: ' + product.brand).slice(0, width) + '\n';
+      }
+
+      if (boolOption(display, 'show_category', false) && product.category) {
+        out += clean('Category: ' + product.category).slice(0, width) + '\n';
+      }
+
+      if (boolOption(display, 'show_sku', false) && product.sku) {
+        out += clean('SKU: ' + product.sku).slice(0, width) + '\n';
+      }
+
+      if (boolOption(display, 'show_serial_no', false) && item.serial_no) {
+        out += clean('Serial: ' + item.serial_no).slice(0, width) + '\n';
+      }
+
+      if (boolOption(display, 'show_carton_qty', false) && item.carton_qty) {
+        out += bold(true);
+        out += clean('PACK QTY: ' + item.carton_qty).slice(0, width) + '\n';
+        out += bold(false);
+      }
+
+      if (boolOption(display, 'show_price', false)) {
+        const cents = product.sale_price_cents != null
+          ? Number(product.sale_price_cents || 0)
+          : Number(product.price_cents || 0);
+        out += bold(true);
+        out += textSize(2, 2);
+        out += clean(currency + ' ' + money(cents / 100)) + '\n';
+        out += textSize(1, 1);
+        out += bold(false);
+      }
+
+      if (scanCode) {
+        out += align('center');
+        out += barcodeCode128(scanCode, {
+          module_width: printerWidthMm <= 58 ? 2 : 3,
+          height: barcodeHeight,
+          hri: false
+        });
+
+        if (boolOption(display, 'show_barcode_text', true)) {
+          out += textSize(1, 1);
+          out += clean(scanCode).slice(0, width) + '\n';
+        }
+      }
+
+      if (feedAfterLabel > 0) out += feed(feedAfterLabel);
+
+      const isLastPhysicalLabel = itemIndex === items.length - 1 && copyIndex === copies - 1;
+      if (cutMode === 'after_each_label' || (cutMode === 'after_batch' && isLastPhysicalLabel)) {
+        out += feed(feedBeforeCut);
+        out += cutCommand();
+      }
+    }
+  });
+
+  if (!items.length) {
+    out += align('center');
+    out += bold(true) + 'NO LABEL ITEMS' + bold(false) + '\n';
+    out += feed(3) + cutCommand();
+  }
+
+  return Buffer.from(out, 'utf8');
 }
 
 function firstValue(payload, keys) {
@@ -427,6 +600,10 @@ function buildKitchenTicket(job) {
 function buildText(job) {
   const type = String(job.type || '').toLowerCase();
 
+  if (type.includes('product_label') || type.includes('label_print') || type === 'label') {
+    return buildProductLabels(job);
+  }
+
   if (type.includes('kitchen') || type.includes('bar')) {
     return buildKitchenTicket(job);
   }
@@ -437,5 +614,6 @@ function buildText(job) {
 module.exports = {
   buildText,
   buildReceipt,
-  buildKitchenTicket
+  buildKitchenTicket,
+  buildProductLabels
 };
