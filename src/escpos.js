@@ -492,8 +492,20 @@ function buildReceipt(job) {
     out += columns('Tax', moneyPlain(payload.tax, firstValue(payload, ['tax_label'])), width);
   }
 
-  const deliveryValue = moneyPlain(payload.delivery || payload.delivery_fee, firstValue(payload, ['delivery_label', 'delivery_fee_label']));
-  if (num(payload.delivery || payload.delivery_fee) > 0 || payload.delivery_label || payload.delivery_fee_label) {
+  const deliveryRaw = isPresent(payload.delivery) && num(payload.delivery) > 0
+    ? payload.delivery
+    : (isPresent(payload.delivery_fee) && num(payload.delivery_fee) > 0
+      ? payload.delivery_fee
+      : (isPresent(payload.delivery) ? payload.delivery : null));
+  const deliveryCents = num(payload.delivery_fee_cents);
+  const deliveryNumber = deliveryRaw !== null && num(deliveryRaw) > 0
+    ? num(deliveryRaw)
+    : deliveryCents / 100;
+  const deliveryValue = moneyPlain(
+    deliveryNumber,
+    firstValue(payload, ['delivery_label', 'delivery_fee_label'])
+  );
+  if (deliveryNumber > 0 || payload.delivery_label || payload.delivery_fee_label) {
     out += columns('Delivery Fee', deliveryValue, width);
   }
 
@@ -548,6 +560,191 @@ function buildReceipt(job) {
   out += cut();
 
   return Buffer.from(out, 'utf8');
+}
+
+function receiptLayoutKey(job) {
+  const payload = job && job.payload ? job.payload : {};
+  const raw = payload.layout_id || payload.layout_key || payload.receipt_layout_key || payload.receipt_layout
+    || job.layout_id || job.layout_key || 'classic_80mm';
+
+  return String(raw)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_') || 'classic_80mm';
+}
+
+function receiptDelivery(payload) {
+  const raw = isPresent(payload.delivery) && num(payload.delivery) > 0
+    ? payload.delivery
+    : (isPresent(payload.delivery_fee) && num(payload.delivery_fee) > 0
+      ? payload.delivery_fee
+      : (isPresent(payload.delivery) ? payload.delivery : null));
+  const cents = num(payload.delivery_fee_cents);
+  const value = raw !== null && num(raw) > 0 ? num(raw) : cents / 100;
+  const label = firstValue(payload, ['delivery_label', 'delivery_fee_label']);
+
+  return {
+    value,
+    label: moneyPlain(value, label),
+    present: value > 0 || isPresent(label)
+  };
+}
+
+function receiptTaxes(payload) {
+  if (Array.isArray(payload.tax_lines)) return payload.tax_lines;
+  if (Array.isArray(payload.taxes)) return payload.taxes;
+  if (Array.isArray(payload.tax_breakdown)) return payload.tax_breakdown;
+  return [];
+}
+
+function appendReceiptTotals(out, payload, width, options = {}) {
+  const delivery = receiptDelivery(payload);
+  const subtotal = moneyPlain(payload.subtotal, firstValue(payload, ['subtotal_label']));
+  const discount = moneyPlain(payload.discount, firstValue(payload, ['discount_label']));
+  const tax = moneyPlain(payload.tax, firstValue(payload, ['tax_label']));
+  const netTotal = moneyPlain(payload.net_total || payload.total || 0, firstValue(payload, ['net_total_label', 'total_label']));
+
+  out += labelValue('Subtotal', subtotal, width);
+
+  if (num(payload.discount) > 0 || payload.discount_label) {
+    out += columns('Discount', discount, width);
+  }
+
+  const taxes = receiptTaxes(payload);
+  if (taxes.length) {
+    if (!options.compact) out += line(width);
+    out += bold(true) + 'TAXES\n' + bold(false);
+    taxes.forEach(taxRow => {
+      const row = normalizeTaxLine(taxRow, payload);
+      out += columns(row.label, row.amount, width);
+    });
+  } else if (num(payload.tax) > 0 || payload.tax_label) {
+    out += columns('Tax', tax, width);
+  }
+
+  if (delivery.present) {
+    out += columns(options.deliveryLabel || 'Delivery Fee', delivery.label, width);
+  }
+
+  out += line(width, options.totalSeparator || '=');
+  return { out, netTotal };
+}
+
+function appendReceiptPayments(out, payload, width) {
+  if (payload.amount_paid != null || payload.amount_paid_label) {
+    out += columns('Amount Paid', moneyPlain(payload.amount_paid, firstValue(payload, ['amount_paid_label'])), width);
+  }
+
+  if (payload.balance != null || payload.balance_label) {
+    out += columns('Balance', moneyPlain(payload.balance, firstValue(payload, ['balance_label'])), width);
+  }
+
+  return out;
+}
+
+function buildStyledReceipt(job, style) {
+  const payload = job.payload || {};
+  const width = Number(payload.paper_width_chars || (String(job.paper_size || '').includes('58') ? 32 : 48));
+  const businessName = firstValue(payload, ['business_name', 'company_name', 'business.name']) || 'DEELOS ERP';
+  const businessPhone = firstValue(payload, ['business_phone', 'phone', 'business.phone']);
+  const businessEmail = firstValue(payload, ['business_email', 'email', 'business.email']);
+  const branchName = firstValue(payload, ['branch_name', 'branch.name']);
+  const orderCode = firstValue(payload, ['order_code', 'order_id']);
+  const date = firstValue(payload, ['date', 'created_at']);
+  const server = firstValue(payload, ['server', 'cashier', 'operator']);
+  const customerName = (firstValue(payload, ['customer_name']) || firstValue(payload, ['customer']) || 'WALK-IN').toString().toUpperCase();
+  const customerPhone = firstValue(payload, ['customer_phone']);
+  const customerAddress = firstValue(payload, ['customer_address']);
+  const table = firstValue(payload, ['table', 'table_label']);
+  const mode = firstValue(payload, ['mode', 'order_mode']);
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const separator = style === 'minimal' ? '-' : (style === 'compact' ? '.' : '=');
+  const compact = style === 'compact';
+  let out = init();
+
+  if (style === 'minimal') {
+    out += align('left') + bold(true) + clean(businessName) + '\n' + bold(false);
+    if (branchName) out += clean(branchName) + '\n';
+  } else {
+    out += align('center') + bold(true);
+    out += textSize(style === 'bold_total' ? 2 : 1, style === 'bold_total' ? 2 : 1);
+    out += clean(businessName) + '\n';
+    out += textSize(1, 1) + bold(false);
+    if (branchName) out += clean(branchName) + '\n';
+    if (style !== 'compact') {
+      if (businessPhone) out += clean(businessPhone) + '\n';
+      if (businessEmail) out += clean(businessEmail) + '\n';
+    }
+  }
+
+  out += align('left') + line(width, separator);
+  out += bold(true);
+  out += columns(style === 'delivery' ? 'DELIVERY RECEIPT' : (payload.subtitle || 'SALES RECEIPT'), orderCode, width);
+  out += bold(false);
+
+  if (date) out += columns('Date', date, width);
+  if (server && style !== 'minimal') out += columns('Server/Cashier', server, width);
+  if (customerName) out += columns('Customer', customerName, width);
+  if (customerPhone) out += columns('Phone', customerPhone, width);
+  if (style === 'delivery' && customerAddress) out += columns('Delivery To', customerAddress, width);
+  if (table && style !== 'minimal') out += columns('Table', table, width);
+  if (mode && style !== 'minimal') out += columns('Order Mode', mode, width);
+
+  out += line(width, separator) + bold(true) + columns('ITEMS', 'TOTAL', width) + bold(false);
+  for (const item of items) {
+    out += itemLine(item, payload, width);
+    if (item.note || item.line_note) out += wrapText('Note: ' + (item.note || item.line_note), width, '  ');
+  }
+
+  out += line(width, separator);
+  const totals = appendReceiptTotals(out, payload, width, {
+    compact,
+    deliveryLabel: style === 'delivery' ? 'Delivery' : 'Delivery Fee',
+    totalSeparator: separator
+  });
+  out = totals.out;
+
+  if (style === 'bold_total') {
+    out += align('center') + bold(true) + textSize(2, 2) + 'TOTAL\n' + clean(totals.netTotal) + '\n' + textSize(1, 1) + bold(false) + align('left');
+  } else if (style === 'minimal') {
+    out += bold(true) + columns('TOTAL', totals.netTotal, width) + bold(false);
+  } else {
+    out += align('center') + bold(true) + textSize(style === 'modern' ? 2 : 1, style === 'modern' ? 2 : 1);
+    out += (style === 'delivery' ? 'AMOUNT DUE\n' : 'NET TOTAL\n') + clean(totals.netTotal) + '\n';
+    out += textSize(1, 1) + bold(false) + align('left');
+  }
+
+  out = appendReceiptPayments(out, payload, width);
+
+  const trackingUrl = firstValue(payload, ['tracking_url', 'track_url', 'qr_text']);
+  const qrText = firstValue(payload, ['qr_text', 'tracking_url', 'track_url', 'qr_code_url']);
+  if (qrText && style !== 'minimal') {
+    out += line(width, separator) + align('center') + qrCode(qrText) + align('left');
+  }
+
+  if (trackingUrl && style === 'delivery') out += wrapText('Track: ' + trackingUrl, width);
+  out += line(width, separator) + align('center') + bold(true) + clean(payload.footer || 'THANK YOU.') + '\n' + bold(false);
+  out += clean(payload.powered_by || 'POWERED BY DEELOS ERP') + '\n' + feed(compact ? 2 : 3) + cut();
+
+  return Buffer.from(out, 'utf8');
+}
+
+function buildReceiptByLayout(job) {
+  switch (receiptLayoutKey(job)) {
+    case 'modern_80mm':
+      return buildStyledReceipt(job, 'modern');
+    case 'compact_80mm':
+      return buildStyledReceipt(job, 'compact');
+    case 'delivery_80mm':
+      return buildStyledReceipt(job, 'delivery');
+    case 'minimal_80mm':
+      return buildStyledReceipt(job, 'minimal');
+    case 'bold_total_80mm':
+      return buildStyledReceipt(job, 'bold_total');
+    case 'classic_80mm':
+    default:
+      return buildReceipt(job);
+  }
 }
 
 function buildKitchenTicket(job) {
@@ -608,12 +805,14 @@ function buildText(job) {
     return buildKitchenTicket(job);
   }
 
-  return buildReceipt(job);
+  return buildReceiptByLayout(job);
 }
 
 module.exports = {
   buildText,
   buildReceipt,
+  buildReceiptByLayout,
+  buildStyledReceipt,
   buildKitchenTicket,
   buildProductLabels
 };
