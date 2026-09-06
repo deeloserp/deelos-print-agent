@@ -140,6 +140,87 @@ function itemLine(item, payload, width = 42) {
   return out;
 }
 
+function receiptItemTableWidths(width = 42) {
+  const paperWidth = Math.max(24, Number(width) || 42);
+  const qtyWidth = paperWidth <= 36 ? 4 : 5;
+  const unitWidth = paperWidth <= 36 ? 8 : 9;
+  const totalWidth = paperWidth <= 36 ? 8 : 10;
+  const nameWidth = Math.max(6, paperWidth - qtyWidth - unitWidth - totalWidth - 3);
+
+  return { nameWidth, qtyWidth, unitWidth, totalWidth };
+}
+
+function receiptItemTableCell(value, width, alignRight = false) {
+  let text = clean(value);
+
+  // Keep numeric columns intact so a large amount is never silently lost.
+  // Item names may wrap below when they are longer than the available column.
+  if (!alignRight && text.length > width) text = text.slice(0, width);
+
+  return alignRight ? text.padStart(width) : text.padEnd(width);
+}
+
+function receiptItemTableRow(name, qty, unit, total, width = 42) {
+  const columns = receiptItemTableWidths(width);
+
+  return [
+    receiptItemTableCell(name, columns.nameWidth),
+    receiptItemTableCell(qty, columns.qtyWidth, true),
+    receiptItemTableCell(unit, columns.unitWidth, true),
+    receiptItemTableCell(total, columns.totalWidth, true)
+  ].join(' ') + '\n';
+}
+
+function itemMoney(item, valueKeys, labelKeys, centsKeys) {
+  const label = firstValue(item, labelKeys);
+  if (isPresent(label)) return moneyPlain('', label);
+
+  const value = firstValue(item, valueKeys);
+  if (isPresent(value)) return moneyPlain(value);
+
+  const cents = firstValue(item, centsKeys);
+  if (isPresent(cents)) return money(num(cents) / 100);
+
+  return money(0);
+}
+
+function itemLineClassicPress(item, payload, width = 42) {
+  const columns = receiptItemTableWidths(width);
+  const qtyValue = firstValue(item, ['qty', 'quantity']);
+  const qtyNumber = num(isPresent(qtyValue) ? qtyValue : 1);
+  const qty = String(Math.max(0, Math.round(qtyNumber)));
+  const name = strip(item.name || item.product_name || item.description || 'Item');
+  const unit = itemMoney(
+    item,
+    ['unit_price', 'price'],
+    ['unit_price_label', 'price_label', 'unit_price_symbol_label', 'price_symbol_label'],
+    ['unit_price_cents', 'price_cents']
+  );
+  const total = itemMoney(
+    item,
+    ['total', 'line_total', 'amount'],
+    ['total_label', 'line_total_label', 'amount_label', 'total_symbol_label'],
+    ['total_cents', 'line_total_cents', 'amount_cents']
+  );
+
+  if (name.length <= columns.nameWidth) {
+    return receiptItemTableRow(name, qty, unit, total, width);
+  }
+
+  let out = '';
+  let remaining = name;
+  let first = true;
+
+  while (remaining.length > columns.nameWidth) {
+    out += receiptItemTableRow(remaining.slice(0, columns.nameWidth), first ? qty : '', first ? unit : '', first ? total : '', width);
+    remaining = remaining.slice(columns.nameWidth);
+    first = false;
+  }
+
+  out += receiptItemTableRow(remaining, first ? qty : '', first ? unit : '', first ? total : '', width);
+  return out;
+}
+
 function init() {
   return ESC + '@';
 }
@@ -405,7 +486,7 @@ function normalizeTaxLine(tax, payload) {
   };
 }
 
-function buildReceipt(job) {
+function buildReceipt(job, options = {}) {
   const payload = job.payload || {};
   const width = Number(payload.paper_width_chars || (String(job.paper_size || '').includes('58') ? 32 : 48));
 
@@ -455,12 +536,16 @@ function buildReceipt(job) {
 
   out += line(width);
   out += bold(true);
-  out += columns('ITEMS', 'TOTAL', width);
+  out += options.itemColumns
+    ? receiptItemTableRow('ITEM', 'QTY', 'UNIT', 'TOTAL', width)
+    : columns('ITEMS', 'TOTAL', width);
   out += bold(false);
 
   const items = Array.isArray(payload.items) ? payload.items : [];
   for (const item of items) {
-    out += itemLine(item, payload, width);
+    out += options.itemColumns
+      ? itemLineClassicPress(item, payload, width)
+      : itemLine(item, payload, width);
 
     if (item.note || item.line_note) {
       out += wrapText('Note: ' + (item.note || item.line_note), width, '  ');
@@ -560,6 +645,10 @@ function buildReceipt(job) {
   out += cut();
 
   return Buffer.from(out, 'utf8');
+}
+
+function buildClassicPressReceipt(job) {
+  return buildReceipt(job, { itemColumns: true });
 }
 
 function receiptLayoutKey(job) {
@@ -741,6 +830,8 @@ function buildReceiptByLayout(job) {
       return buildStyledReceipt(job, 'minimal');
     case 'bold_total_80mm':
       return buildStyledReceipt(job, 'bold_total');
+    case 'classic_press_80mm':
+      return buildClassicPressReceipt(job);
     case 'classic_80mm':
     default:
       return buildReceipt(job);
@@ -811,6 +902,7 @@ function buildText(job) {
 module.exports = {
   buildText,
   buildReceipt,
+  buildClassicPressReceipt,
   buildReceiptByLayout,
   buildStyledReceipt,
   buildKitchenTicket,
