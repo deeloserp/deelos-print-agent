@@ -469,6 +469,98 @@ function firstValue(payload, keys) {
   return '';
 }
 
+function jobLabelLayoutKey(job) {
+  const payload = job && job.payload ? job.payload : {};
+  const raw = payload.label_layout_key || payload.job_label_layout_key || payload.label_layout
+    || payload.layout_id || payload.layout_key || job.label_layout_key || job.layout_id
+    || 'job_label_classic';
+
+  return String(raw)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_') || 'job_label_classic';
+}
+
+function buildJobLabel(job) {
+  const payload = job.payload || {};
+  const layout = jobLabelLayoutKey(job);
+  const paperSize = String(job.paper_size || payload.paper_size || '80mm').toLowerCase();
+  const width = paperSize.includes('58') ? 32 : 48;
+  const compact = layout.includes('compact');
+  const boldLayout = layout.includes('bold');
+  const items = Array.isArray(payload.items) ? payload.items : [];
+
+  const businessName = firstValue(payload, ['business_name', 'company_name', 'business.name']);
+  const branchName = firstValue(payload, ['branch_name', 'branch.name']);
+  const orderCode = strip(firstValue(payload, ['order_code', 'order_id'])) || 'ORDER';
+  const customerName = strip(firstValue(payload, ['customer_name', 'customer.name'])) || 'WALK-IN';
+  const contact = strip(firstValue(payload, ['customer_phone', 'contact', 'phone', 'customer.phone']));
+  const jobDescription = strip(firstValue(payload, ['job_description', 'description']))
+    || items.map(item => strip(item.description || item.product_name || item.name || 'Job'))
+      .filter(Boolean)
+      .join(' / ')
+    || 'PRINT JOB';
+  const jobQuantity = firstValue(payload, ['job_quantity', 'quantity', 'qty'])
+    || items.reduce((total, item) => total + Math.max(0, Number(item.qty || item.quantity || 0)), 0)
+    || 1;
+  const date = strip(firstValue(payload, ['date', 'created_at'])) || new Date().toLocaleString();
+  const deliveryAddress = strip(firstValue(payload, [
+    'delivery_address',
+    'customer_delivery_address',
+    'customer_address',
+    'customer.address'
+  ]));
+  const requestedDelivery = strip(firstValue(payload, ['delivery_pickup', 'delivery_method', 'fulfillment', 'delivery_mode']));
+  const deliveryPickup = requestedDelivery || (deliveryAddress ? 'DELIVERY' : 'PICKUP');
+  const barcodeValue = strip(firstValue(payload, ['barcode_value', 'barcode', 'order_code', 'order_id'])) || orderCode;
+
+  let out = init();
+  out += align('center');
+
+  if (!compact && businessName) {
+    out += bold(true) + textSize(boldLayout ? 2 : 1, boldLayout ? 2 : 1);
+    out += clean(businessName).slice(0, width) + '\n';
+    out += textSize(1, 1) + bold(false);
+    if (branchName) out += clean(branchName).slice(0, width) + '\n';
+  }
+
+  out += line(width, boldLayout ? '=' : '-');
+  out += bold(true);
+  if (boldLayout) out += textSize(2, 2);
+  out += clean('JOB LABEL') + '\n';
+  out += clean(orderCode).slice(0, width) + '\n';
+  if (boldLayout) out += textSize(1, 1);
+  out += bold(false);
+  out += align('left');
+  out += line(width, boldLayout ? '=' : '-');
+
+  const field = (label, value) => {
+    if (!isPresent(value)) return '';
+    return bold(true) + clean(label + ':') + '\n' + bold(false) + wrapText(value, width, '  ');
+  };
+
+  out += field('Customer', customerName);
+  out += field('Contact', contact);
+  out += field('Job Description', jobDescription);
+  out += field('Job Quantity', String(jobQuantity));
+  out += field('Date', date);
+  out += field('Delivery/Pickup', deliveryPickup);
+  out += field('Delivery Address', deliveryAddress || 'Not provided');
+
+  out += line(width, boldLayout ? '=' : '-');
+  out += align('center');
+  out += barcodeCode128(barcodeValue, {
+    module_width: paperSize.includes('58') ? 2 : 3,
+    height: compact ? 42 : 54,
+    hri: false
+  });
+  out += clean(barcodeValue).slice(0, width) + '\n';
+  out += feed(compact ? 2 : 3);
+  out += cut();
+
+  return Buffer.from(out, 'utf8');
+}
+
 function normalizeTaxLine(tax, payload) {
   const name = strip(tax.name || tax.tax_name || tax.label || tax.tax_code || tax.code || 'Tax');
   const rate = firstValue(tax, ['rate', 'tax_rate', 'rate_pct', 'percentage']);
@@ -892,6 +984,11 @@ function buildText(job) {
     return buildProductLabels(job);
   }
 
+  const printerRole = String(job.printer_role || (job.station && job.station.printer_role) || '').toLowerCase();
+  if (printerRole === 'label' || type.includes('job_label') || type.includes('order_label')) {
+    return buildJobLabel(job);
+  }
+
   if (type.includes('kitchen') || type.includes('bar')) {
     return buildKitchenTicket(job);
   }
@@ -906,5 +1003,6 @@ module.exports = {
   buildReceiptByLayout,
   buildStyledReceipt,
   buildKitchenTicket,
-  buildProductLabels
+  buildProductLabels,
+  buildJobLabel
 };
