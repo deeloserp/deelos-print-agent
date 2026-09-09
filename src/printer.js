@@ -328,6 +328,10 @@ async function sendToPrinter(buffer, station) {
 
 function resolveStation(job) {
   const station = job.station || {};
+  const jobType = String(job.type || '').toLowerCase();
+  const documentName = jobType.includes('job_label') || jobType.includes('order_label')
+    ? 'Job Labels'
+    : (jobType.includes('label') ? 'Product Labels' : '');
 
   return {
     station_key: station.station_key || job.station_key || job.printer_role || 'receipt',
@@ -338,7 +342,7 @@ function resolveStation(job) {
     printer_ip: station.printer_ip || job.printer_ip || '',
     printer_port: station.printer_port || job.printer_port || 9100,
     paper_size: station.paper_size || job.paper_size || '80mm',
-    document_name: station.document_name || (String(job.type || '').toLowerCase().includes('label') ? 'Product Labels' : ''),
+    document_name: station.document_name || documentName,
     copies: Number(station.copies || job.copies || 1)
   };
 }
@@ -414,10 +418,12 @@ async function printJobs(body, config) {
 
 async function testPrint(body, config) {
   const station = body.station || body;
+  const printerRole = String(station.printer_role || body.printer_role || 'receipt').toLowerCase();
+  const isJobLabel = printerRole === 'label' || String(body.type || '').toLowerCase().includes('job_label');
 
   const job = {
-    type: body.type || 'test_receipt',
-    printer_role: station.printer_role || body.printer_role || 'receipt',
+    type: body.type || (isJobLabel ? 'job_label' : 'test_receipt'),
+    printer_role: printerRole,
     copies: body.copies || station.copies || 1,
     station,
     payload: {
@@ -449,6 +455,11 @@ async function testPrint(body, config) {
       net_total: 0,
       amount_paid: 0,
       balance: 0,
+      job_description: 'Sample printing press job label',
+      job_quantity: 100,
+      delivery_pickup: 'PICKUP',
+      delivery_address: 'Kumasi Central',
+      barcode_value: 'TEST-' + Date.now(),
       tracking_url: 'https://deeloserp.com',
       qr_text: 'https://deeloserp.com',
       footer: 'THANK YOU.',
