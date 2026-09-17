@@ -338,7 +338,8 @@ function buildProductLabels(job) {
 
   const paperSize = String(job.paper_size || printOptions.paper_size || template.fallback_paper_size || '80mm');
   const printerWidthMm = Number(template.printer_width_mm || template.label_width_mm || (paperSize.includes('58') ? 58 : 80));
-  const width = printerWidthMm <= 58 ? 32 : 48;
+  const labelWidthMm = Math.max(30, Number(template.label_width_mm || printerWidthMm));
+  const width = labelWidthMm <= 50 ? 30 : (printerWidthMm <= 58 ? 32 : 48);
   const labelHeightMm = Math.max(15, Number(template.label_height_mm || 30));
   const barcodeHeight = Math.max(32, Math.min(90, Math.round(labelHeightMm * 1.65)));
 
@@ -419,7 +420,7 @@ function buildProductLabels(job) {
       if (scanCode) {
         out += align('center');
         out += barcodeCode128(scanCode, {
-          module_width: printerWidthMm <= 58 ? 2 : 3,
+          module_width: labelWidthMm <= 50 ? 2 : (printerWidthMm <= 58 ? 2 : 3),
           height: barcodeHeight,
           hri: false
         });
@@ -980,12 +981,12 @@ function buildKitchenTicket(job) {
 function buildText(job) {
   const type = String(job.type || '').toLowerCase();
 
-  if (type.includes('product_label') || type.includes('label_print') || type === 'label') {
+  if (type.includes('product_label') || type.includes('label_print')) {
     return buildProductLabels(job);
   }
 
   const printerRole = String(job.printer_role || (job.station && job.station.printer_role) || '').toLowerCase();
-  if (printerRole === 'label' || type.includes('job_label') || type.includes('order_label')) {
+  if (printerRole === 'job_label' || printerRole === 'label' || type.includes('job_label') || type.includes('order_label')) {
     return buildJobLabel(job);
   }
 
