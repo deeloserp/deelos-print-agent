@@ -419,10 +419,13 @@ async function printJobs(body, config) {
 async function testPrint(body, config) {
   const station = body.station || body;
   const printerRole = String(station.printer_role || body.printer_role || 'receipt').toLowerCase();
-  const isJobLabel = printerRole === 'label' || String(body.type || '').toLowerCase().includes('job_label');
+  const bodyType = String(body.type || '').toLowerCase();
+  const isProductLabel = printerRole === 'product_label' || printerRole === 'barcode' || bodyType.includes('product_label');
+  const isJobLabel = printerRole === 'job_label' || printerRole === 'label' || bodyType.includes('job_label');
+  const sampleCode = 'TEST-' + Date.now();
 
   const job = {
-    type: body.type || (isJobLabel ? 'job_label' : 'test_receipt'),
+    type: body.type || (isProductLabel ? 'product_label' : (isJobLabel ? 'job_label' : 'test_receipt')),
     printer_role: printerRole,
     copies: body.copies || station.copies || 1,
     station,
@@ -432,7 +435,7 @@ async function testPrint(body, config) {
       business_email: body.business_email || 'support@deeloserp.com',
       business_website: body.business_website || 'www.deeloserp.com',
       branch_name: body.branch_name || 'Print Agent Test',
-      order_code: 'TEST-' + Date.now(),
+      order_code: sampleCode,
       date: new Date().toLocaleString(),
       cashier: os.hostname(),
       server: os.hostname(),
@@ -440,9 +443,46 @@ async function testPrint(body, config) {
       customer_phone: '0000000000',
       table: 'T1',
       mode: 'DINE-IN',
-      items: [
+      items: isProductLabel ? [
+        {
+          label_type: 'product',
+          scan_code: sampleCode,
+          barcode_value: sampleCode,
+          copies: 1,
+          product: {
+            name: 'Product label test',
+            sku: 'TEST-SKU',
+            barcode: sampleCode,
+            price_cents: 0
+          }
+        }
+      ] : [
         { name: 'Receipt printer test', qty: 1, total: 0.00 }
       ],
+      batch: {
+        label_type: 'product',
+        display_options: {
+          show_business_name: true,
+          show_product_name: true,
+          show_sku: true,
+          show_barcode_text: true
+        }
+      },
+      template: {
+        printer_width_mm: station.paper_size && String(station.paper_size).includes('58') ? 58 : 80,
+        label_height_mm: 30,
+        display_options: {
+          show_business_name: true,
+          show_product_name: true,
+          show_sku: true,
+          show_barcode_text: true
+        }
+      },
+      print_options: {
+        cut_each_label: true,
+        cut_mode: 'after_each_label',
+        feed_before_cut: 3
+      },
       subtotal: 0,
       discount: 0,
       tax_lines: [
@@ -459,7 +499,7 @@ async function testPrint(body, config) {
       job_quantity: 100,
       delivery_pickup: 'PICKUP',
       delivery_address: 'Kumasi Central',
-      barcode_value: 'TEST-' + Date.now(),
+      barcode_value: sampleCode,
       tracking_url: 'https://deeloserp.com',
       qr_text: 'https://deeloserp.com',
       footer: 'THANK YOU.',
