@@ -450,6 +450,172 @@ function buildProductLabels(job) {
   return Buffer.from(out, 'utf8');
 }
 
+function tsplClean(value) {
+  return String(value == null ? '' : value)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/"/g, "'")
+    .replace(/[^\x20-\x7E]/g, '')
+    .trim();
+}
+
+function tsplText(x, y, value, options = {}) {
+  const text = tsplClean(value);
+  if (!text) return '';
+
+  const font = String(options.font || '0');
+  const rotation = Number(options.rotation || 0) === 90 ? 90 : 0;
+  const xScale = Math.max(1, Math.min(10, Number(options.x_scale || 1)));
+  const yScale = Math.max(1, Math.min(10, Number(options.y_scale || 1)));
+
+  return `TEXT ${Math.max(0, Math.round(x))},${Math.max(0, Math.round(y))},"${font}",${rotation},${xScale},${yScale},"${text}"\r\n`;
+}
+
+function tsplWrap(value, maxChars) {
+  const text = tsplClean(value);
+  if (!text) return [];
+
+  const width = Math.max(8, Number(maxChars || 24));
+  const words = text.split(/\s+/);
+  const lines = [];
+  let current = '';
+
+  words.forEach(word => {
+    if (!current) {
+      current = word;
+      return;
+    }
+
+    if ((current + ' ' + word).length > width) {
+      lines.push(current.slice(0, width));
+      current = word;
+    } else {
+      current += ' ' + word;
+    }
+  });
+
+  if (current) lines.push(current.slice(0, width));
+  return lines;
+}
+
+function tsplLabelValue(label, value) {
+  const cleanValue = tsplClean(value);
+  if (!cleanValue) return '';
+  return `${label}: ${cleanValue}`;
+}
+
+/**
+ * Build TSPL for die-cut product-label printers such as Xprinter/XLabel.
+ * Product labels use a different raw language from receipt/job-label printers;
+ * receipt output remains ESC/POS in buildProductLabels above.
+ */
+function buildTsplProductLabels(job) {
+  const payload = job.payload || {};
+  const batch = payload.batch || {};
+  const template = payload.template || {};
+  const printOptions = payload.print_options || {};
+  const display = template.display_options || batch.display_options || {};
+  const items = Array.isArray(payload.items) ? payload.items : [];
+
+  const labelWidthMm = Math.max(20, Math.min(100, Number(template.label_width_mm || 50)));
+  const labelHeightMm = Math.max(10, Math.min(100, Number(template.label_height_mm || 30)));
+  const gapMm = Math.max(0, Math.min(10, Number(printOptions.gap_mm ?? template.gap_mm ?? 2)));
+
+  const businessName = firstValue(payload, ['business.name', 'business_name', 'company_name']) || 'DEELOS ERP';
+  const branchName = firstValue(payload, ['branch.name', 'branch_name']);
+  const currency = firstValue(payload, ['currency', 'business.currency']) || 'GHS';
+  const dotsPerMm = 203 / 25.4;
+  const widthDots = Math.round(labelWidthMm * dotsPerMm);
+  const heightDots = Math.round(labelHeightMm * dotsPerMm);
+  const margin = Math.max(6, Math.round(dotsPerMm * 1));
+  const maxChars = Math.max(12, Math.floor((widthDots - margin * 2) / 11));
+  // Keep the barcode compact on 50 x 30 mm stickers. Newly generated
+  // Deelos labels use numeric Code 128 values so the bars stay short enough
+  // for the XP-237B print area while remaining scanner-friendly.
+  const barcodeHeight = Math.max(42, Math.min(84, Math.round(heightDots * 0.28)));
+
+  let output = '';
+  output += `SIZE ${labelWidthMm.toFixed(2)} mm,${labelHeightMm.toFixed(2)} mm\r\n`;
+  output += `GAP ${gapMm.toFixed(2)} mm,0 mm\r\n`;
+  output += 'DIRECTION 1\r\n';
+  output += 'REFERENCE 0,0\r\n';
+  output += 'CLS\r\n';
+
+  const addOneLabel = (item) => {
+    const product = item.product || {};
+    const scanCode = tsplClean(item.scan_code || item.barcode_value || product.barcode || product.sku);
+    const nameLines = tsplWrap(product.name || 'Product', maxChars);
+    let y = margin;
+
+    output += 'CLS\r\n';
+
+    if (boolOption(display, 'show_business_name', false)) {
+      output += tsplText(margin, y, businessName, { x_scale: 1, y_scale: 1 });
+      y += 16;
+      if (branchName) {
+        output += tsplText(margin, y, branchName, { x_scale: 1, y_scale: 1 });
+        y += 16;
+      }
+    }
+
+    if (boolOption(display, 'show_label_type', false)) {
+      output += tsplText(margin, y, labelTypeName(item.label_type || batch.label_type), { x_scale: 1, y_scale: 1 });
+      y += 16;
+    }
+
+    if (boolOption(display, 'show_product_name', true)) {
+      nameLines.slice(0, 2).forEach(lineValue => {
+        output += tsplText(margin, y, lineValue, { x_scale: 1, y_scale: 1 });
+        y += 16;
+      });
+    }
+
+    const metadata = [];
+    if (boolOption(display, 'show_brand', false) && product.brand) metadata.push(tsplLabelValue('Brand', product.brand));
+    if (boolOption(display, 'show_category', false) && product.category) metadata.push(tsplLabelValue('Category', product.category));
+    if (boolOption(display, 'show_sku', false) && product.sku) metadata.push(tsplLabelValue('SKU', product.sku));
+    if (boolOption(display, 'show_serial_no', false) && item.serial_no) metadata.push(tsplLabelValue('Serial', item.serial_no));
+    if (boolOption(display, 'show_carton_qty', false) && item.carton_qty) metadata.push(tsplLabelValue('PACK QTY', item.carton_qty));
+
+    metadata.slice(0, 2).forEach(lineValue => {
+      output += tsplText(margin, y, lineValue, { x_scale: 1, y_scale: 1 });
+      y += 16;
+    });
+
+    if (boolOption(display, 'show_price', false)) {
+      const cents = product.sale_price_cents != null
+        ? Number(product.sale_price_cents || 0)
+        : Number(product.price_cents || 0);
+      output += tsplText(margin, y, currency + ' ' + money(cents / 100), { x_scale: 2, y_scale: 2 });
+    }
+
+    if (scanCode) {
+      const barcodeTextSpace = boolOption(display, 'show_barcode_text', true) ? 18 : 6;
+      const maxBarcodeY = Math.max(margin, heightDots - barcodeHeight - barcodeTextSpace);
+      const barcodeY = Math.max(margin, Math.min(maxBarcodeY, y + 5));
+      output += `BARCODE ${margin},${barcodeY},"128",${barcodeHeight},1,0,2,2,"${scanCode.slice(0, 80)}"\r\n`;
+      if (boolOption(display, 'show_barcode_text', true)) {
+        output += tsplText(margin, Math.min(heightDots - 16, barcodeY + barcodeHeight + 4), scanCode, { x_scale: 1, y_scale: 1 });
+      }
+    }
+
+    output += 'PRINT 1,1\r\n';
+  };
+
+  items.forEach(item => {
+    const copies = Math.max(1, Number(item.copies || 1));
+    for (let copyIndex = 0; copyIndex < copies; copyIndex += 1) {
+      addOneLabel(item);
+    }
+  });
+
+  if (!items.length) {
+    output += tsplText(margin, margin, 'NO LABEL ITEMS', { x_scale: 1, y_scale: 1 });
+    output += 'PRINT 1,1\r\n';
+  }
+
+  return Buffer.from(output, 'ascii');
+}
+
 function firstValue(payload, keys) {
   for (const key of keys) {
     const parts = String(key).split('.');
@@ -982,6 +1148,18 @@ function buildText(job) {
   const type = String(job.type || '').toLowerCase();
 
   if (type.includes('product_label') || type.includes('label_print')) {
+    const printOptions = job.payload && job.payload.print_options ? job.payload.print_options : {};
+    const protocol = String(
+      job.print_protocol
+      || (job.station && job.station.print_protocol)
+      || printOptions.print_protocol
+      || ''
+    ).trim().toLowerCase();
+
+    if (protocol === 'tspl' || protocol === 'tspl2' || protocol === 'xprinter') {
+      return buildTsplProductLabels(job);
+    }
+
     return buildProductLabels(job);
   }
 
@@ -1005,5 +1183,6 @@ module.exports = {
   buildStyledReceipt,
   buildKitchenTicket,
   buildProductLabels,
+  buildTsplProductLabels,
   buildJobLabel
 };
