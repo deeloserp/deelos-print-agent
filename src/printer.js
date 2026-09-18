@@ -197,7 +197,8 @@ function logJob(job, config) {
       connection_type: job.station.connection_type,
       printer_name: job.station.printer_name,
       printer_ip: job.station.printer_ip,
-      printer_port: job.station.printer_port
+      printer_port: job.station.printer_port,
+      print_protocol: job.print_protocol || job.station.print_protocol || ''
     } : null
   };
 
@@ -329,6 +330,8 @@ async function sendToPrinter(buffer, station) {
 function resolveStation(job) {
   const station = job.station || {};
   const jobType = String(job.type || '').toLowerCase();
+  const printerRole = String(station.printer_role || job.printer_role || 'receipt').toLowerCase();
+  const isProductLabel = printerRole === 'product_label' || jobType.includes('product_label');
   const documentName = jobType.includes('job_label') || jobType.includes('order_label')
     ? 'Job Labels'
     : (jobType.includes('label') ? 'Product Labels' : '');
@@ -336,12 +339,13 @@ function resolveStation(job) {
   return {
     station_key: station.station_key || job.station_key || job.printer_role || 'receipt',
     station_name: station.station_name || '',
-    printer_role: station.printer_role || job.printer_role || 'receipt',
+    printer_role: printerRole,
     connection_type: station.connection_type || job.connection_type || 'usb',
     printer_name: station.printer_name || job.printer_name || '',
     printer_ip: station.printer_ip || job.printer_ip || '',
     printer_port: station.printer_port || job.printer_port || 9100,
     paper_size: station.paper_size || job.paper_size || '80mm',
+    print_protocol: station.print_protocol || job.print_protocol || (isProductLabel ? 'tspl' : ''),
     document_name: station.document_name || documentName,
     copies: Number(station.copies || job.copies || 1)
   };
@@ -354,6 +358,7 @@ async function printSingleJob(job, config) {
 
   const normalized = Object.assign({}, job, {
     paper_size: paperSize,
+    print_protocol: job.print_protocol || station.print_protocol || '',
     station
   });
 
@@ -422,11 +427,12 @@ async function testPrint(body, config) {
   const bodyType = String(body.type || '').toLowerCase();
   const isProductLabel = printerRole === 'product_label' || printerRole === 'barcode' || bodyType.includes('product_label');
   const isJobLabel = printerRole === 'job_label' || printerRole === 'label' || bodyType.includes('job_label');
-  const sampleCode = 'TEST-' + Date.now();
+  const sampleCode = isProductLabel ? '12345' : 'TEST-' + Date.now();
 
   const job = {
     type: body.type || (isProductLabel ? 'product_label' : (isJobLabel ? 'job_label' : 'test_receipt')),
     printer_role: printerRole,
+    print_protocol: body.print_protocol || station.print_protocol || (isProductLabel ? 'tspl' : ''),
     copies: body.copies || station.copies || 1,
     station,
     payload: {
@@ -481,7 +487,8 @@ async function testPrint(body, config) {
       print_options: {
         cut_each_label: true,
         cut_mode: 'after_each_label',
-        feed_before_cut: 3
+        feed_before_cut: 3,
+        print_protocol: isProductLabel ? 'tspl' : ''
       },
       subtotal: 0,
       discount: 0,
