@@ -869,6 +869,11 @@ function buildReceipt(job, options = {}) {
     out += columns('Amount Paid', moneyPlain(payload.amount_paid, firstValue(payload, ['amount_paid_label'])), width);
   }
 
+  const paymentMethod = receiptPaymentMethodLabel(payload);
+  if (paymentMethod) {
+    out += columns('Method', paymentMethod, width);
+  }
+
   if (payload.balance != null || payload.balance_label) {
     out += columns('Balance', moneyPlain(payload.balance, firstValue(payload, ['balance_label'])), width);
   }
@@ -978,9 +983,57 @@ function appendReceiptTotals(out, payload, width, options = {}) {
   return { out, netTotal };
 }
 
+function receiptPaymentMethodLabel(payload) {
+  const payments = payload && Array.isArray(payload.payments) ? payload.payments : [];
+  const labels = [];
+
+  const formatMethod = value => {
+    const raw = strip(value);
+    if (!raw) return '';
+
+    const key = raw.toLowerCase().replace(/[\s_-]+/g, '');
+    const known = {
+      cash: 'Cash',
+      momo: 'MoMo',
+      mobilemoney: 'MoMo',
+      bank: 'Bank',
+      banktransfer: 'Bank',
+      card: 'Card',
+      creditcard: 'Card',
+      debitcard: 'Card',
+      other: 'Other'
+    };
+
+    if (known[key]) return known[key];
+
+    return raw
+      .toLowerCase()
+      .split(/\s+/)
+      .map(word => word ? word.charAt(0).toUpperCase() + word.slice(1) : '')
+      .join(' ');
+  };
+
+  payments.forEach(payment => {
+    const label = formatMethod(firstValue(payment || {}, ['method', 'payment_method', 'type']));
+    if (label && !labels.includes(label)) labels.push(label);
+  });
+
+  if (!labels.length) {
+    const fallback = formatMethod(firstValue(payload || {}, ['payment_method', 'method']));
+    if (fallback) labels.push(fallback);
+  }
+
+  return labels.join(' + ');
+}
+
 function appendReceiptPayments(out, payload, width) {
   if (payload.amount_paid != null || payload.amount_paid_label) {
     out += columns('Amount Paid', moneyPlain(payload.amount_paid, firstValue(payload, ['amount_paid_label'])), width);
+  }
+
+  const paymentMethod = receiptPaymentMethodLabel(payload);
+  if (paymentMethod) {
+    out += columns('Method', paymentMethod, width);
   }
 
   if (payload.balance != null || payload.balance_label) {
