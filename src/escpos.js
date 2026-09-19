@@ -470,6 +470,62 @@ function tsplText(x, y, value, options = {}) {
   return `TEXT ${Math.max(0, Math.round(x))},${Math.max(0, Math.round(y))},"${font}",${rotation},${xScale},${yScale},"${text}"\r\n`;
 }
 
+function tsplFontCharWidth(font = '0') {
+  switch (String(font)) {
+    case '1': return 8;
+    case '2': return 12;
+    case '3': return 16;
+    case '4': return 24;
+    case '5': return 32;
+    default: return 12;
+  }
+}
+
+function tsplFontCharHeight(font = '0') {
+  switch (String(font)) {
+    case '1': return 12;
+    case '2': return 20;
+    case '3': return 24;
+    case '4': return 32;
+    case '5': return 48;
+    default: return 12;
+  }
+}
+
+function tsplTextWidth(value, options = {}) {
+  const text = tsplClean(value);
+  if (!text) return 0;
+
+  const font = String(options.font || '0');
+  const xScale = Math.max(1, Math.min(10, Number(options.x_scale || 1)));
+  return text.length * tsplFontCharWidth(font) * xScale;
+}
+
+function tsplCenteredText(widthDots, y, value, options = {}) {
+  const text = tsplClean(value);
+  if (!text) return '';
+
+  const estimatedWidth = Math.min(widthDots, tsplTextWidth(text, options));
+  const x = Math.max(0, Math.round((widthDots - estimatedWidth) / 2));
+  return tsplText(x, y, text, options);
+}
+
+function tsplBarcodeWidthDots(value, narrowWidth = 3) {
+  const text = tsplClean(value).slice(0, 80);
+  if (!text) return 0;
+
+  // Code 128 uses 11 modules per symbol, plus start/checksum and a 13-module
+  // stop symbol. Numeric values can use Code Set C and occupy two digits per
+  // data symbol; alphanumeric values use one character per symbol.
+  const dataSymbols = /^\d+$/.test(text) && text.length % 2 === 0
+    ? text.length / 2
+    : text.length;
+  const modules = (dataSymbols + 3) * 11 + 13;
+  const quietZone = Math.max(8, narrowWidth * 4);
+
+  return Math.round(modules * narrowWidth + quietZone);
+}
+
 function tsplWrap(value, maxChars) {
   const text = tsplClean(value);
   if (!text) return [];
@@ -526,12 +582,14 @@ function buildTsplProductLabels(job) {
   const dotsPerMm = 203 / 25.4;
   const widthDots = Math.round(labelWidthMm * dotsPerMm);
   const heightDots = Math.round(labelHeightMm * dotsPerMm);
-  const margin = Math.max(6, Math.round(dotsPerMm * 1));
-  const maxChars = Math.max(12, Math.floor((widthDots - margin * 2) / 11));
-  // Keep the barcode compact on 50 x 30 mm stickers. Newly generated
-  // Deelos labels use numeric Code 128 values so the bars stay short enough
-  // for the XP-237B print area while remaining scanner-friendly.
-  const barcodeHeight = Math.max(42, Math.min(84, Math.round(heightDots * 0.28)));
+  const horizontalMargin = Math.max(8, Math.round(widthDots * 0.05));
+  const contentWidthDots = Math.max(80, widthDots - horizontalMargin * 2);
+  const verticalMargin = Math.max(8, Math.round(heightDots * 0.05));
+  const compactLabel = labelWidthMm <= 60;
+  const mainTextScale = compactLabel ? 2 : 1;
+  const barcodeNarrowWidth = compactLabel ? 3 : 2;
+  const barcodeWideWidth = compactLabel ? 3 : 2;
+  const barcodeTextHeight = boolOption(display, 'show_barcode_text', true) ? 16 : 0;
 
   let output = '';
   output += `SIZE ${labelWidthMm.toFixed(2)} mm,${labelHeightMm.toFixed(2)} mm\r\n`;
@@ -543,30 +601,34 @@ function buildTsplProductLabels(job) {
   const addOneLabel = (item) => {
     const product = item.product || {};
     const scanCode = tsplClean(item.scan_code || item.barcode_value || product.barcode || product.sku);
-    const nameLines = tsplWrap(product.name || 'Product', maxChars);
-    let y = margin;
+    const textLines = [];
+    const addTextLines = (value, options = {}) => {
+      const text = tsplClean(value);
+      if (!text) return;
+
+      const scale = Math.max(1, Number(options.x_scale || 1));
+      const maxChars = Math.max(8, Math.floor(contentWidthDots / (tsplFontCharWidth(options.font || '0') * scale)));
+      tsplWrap(text, maxChars).forEach(lineValue => {
+        textLines.push({
+          value: lineValue,
+          options: Object.assign({ font: '0', x_scale: scale, y_scale: scale }, options)
+        });
+      });
+    };
 
     output += 'CLS\r\n';
 
     if (boolOption(display, 'show_business_name', false)) {
-      output += tsplText(margin, y, businessName, { x_scale: 1, y_scale: 1 });
-      y += 16;
-      if (branchName) {
-        output += tsplText(margin, y, branchName, { x_scale: 1, y_scale: 1 });
-        y += 16;
-      }
+      addTextLines(businessName, { x_scale: 1, y_scale: 1 });
+      if (branchName) addTextLines(branchName, { x_scale: 1, y_scale: 1 });
     }
 
     if (boolOption(display, 'show_label_type', false)) {
-      output += tsplText(margin, y, labelTypeName(item.label_type || batch.label_type), { x_scale: 1, y_scale: 1 });
-      y += 16;
+      addTextLines(labelTypeName(item.label_type || batch.label_type), { x_scale: 1, y_scale: 1 });
     }
 
     if (boolOption(display, 'show_product_name', true)) {
-      nameLines.slice(0, 2).forEach(lineValue => {
-        output += tsplText(margin, y, lineValue, { x_scale: 1, y_scale: 1 });
-        y += 16;
-      });
+      addTextLines(product.name || 'Product', { x_scale: mainTextScale, y_scale: mainTextScale });
     }
 
     const metadata = [];
@@ -576,25 +638,47 @@ function buildTsplProductLabels(job) {
     if (boolOption(display, 'show_serial_no', false) && item.serial_no) metadata.push(tsplLabelValue('Serial', item.serial_no));
     if (boolOption(display, 'show_carton_qty', false) && item.carton_qty) metadata.push(tsplLabelValue('PACK QTY', item.carton_qty));
 
-    metadata.slice(0, 2).forEach(lineValue => {
-      output += tsplText(margin, y, lineValue, { x_scale: 1, y_scale: 1 });
-      y += 16;
-    });
+    metadata.slice(0, 2).forEach(lineValue => addTextLines(lineValue, { x_scale: 1, y_scale: 1 }));
 
     if (boolOption(display, 'show_price', false)) {
       const cents = product.sale_price_cents != null
         ? Number(product.sale_price_cents || 0)
         : Number(product.price_cents || 0);
-      output += tsplText(margin, y, currency + ' ' + money(cents / 100), { x_scale: 2, y_scale: 2 });
+      addTextLines(currency + ' ' + money(cents / 100), { x_scale: 2, y_scale: 2 });
     }
 
+    const textHeight = textLines.reduce((total, line) => {
+      const scale = Math.max(1, Number(line.options.y_scale || 1));
+      return total + tsplFontCharHeight(line.options.font || '0') * scale + 4;
+    }, 0);
+    const barcodeGap = scanCode ? 8 : 0;
+    const desiredBarcodeHeight = Math.max(72, Math.min(124, Math.round(heightDots * 0.42)));
+    const availableBarcodeHeight = Math.max(
+      48,
+      heightDots - (verticalMargin * 2) - textHeight - barcodeGap - barcodeTextHeight
+    );
+    const barcodeHeight = Math.min(desiredBarcodeHeight, availableBarcodeHeight);
+    const contentHeight = textHeight + (scanCode ? barcodeGap + barcodeHeight + barcodeTextHeight : 0);
+    let y = Math.max(verticalMargin, Math.round((heightDots - contentHeight) / 2));
+
+    textLines.forEach(line => {
+      output += tsplCenteredText(widthDots, y, line.value, line.options);
+      const scale = Math.max(1, Number(line.options.y_scale || 1));
+      y += tsplFontCharHeight(line.options.font || '0') * scale + 4;
+    });
+
     if (scanCode) {
-      const barcodeTextSpace = boolOption(display, 'show_barcode_text', true) ? 18 : 6;
-      const maxBarcodeY = Math.max(margin, heightDots - barcodeHeight - barcodeTextSpace);
-      const barcodeY = Math.max(margin, Math.min(maxBarcodeY, y + 5));
-      output += `BARCODE ${margin},${barcodeY},"128",${barcodeHeight},1,0,2,2,"${scanCode.slice(0, 80)}"\r\n`;
+      const barcodeValue = scanCode.slice(0, 80);
+      const estimatedBarcodeWidth = tsplBarcodeWidthDots(barcodeValue, barcodeNarrowWidth);
+      const barcodeWidth = Math.min(contentWidthDots, Math.max(40, estimatedBarcodeWidth));
+      const barcodeX = Math.max(0, Math.round((widthDots - barcodeWidth) / 2));
+      const barcodeY = Math.min(heightDots - barcodeHeight - barcodeTextHeight - verticalMargin, y + barcodeGap);
+
+      // readable=0 prevents the printer from adding its own HRI text. Deelos
+      // prints one centered barcode value below the bars when requested.
+      output += `BARCODE ${barcodeX},${barcodeY},"128",${barcodeHeight},0,0,${barcodeNarrowWidth},${barcodeWideWidth},"${barcodeValue}"\r\n`;
       if (boolOption(display, 'show_barcode_text', true)) {
-        output += tsplText(margin, Math.min(heightDots - 16, barcodeY + barcodeHeight + 4), scanCode, { x_scale: 1, y_scale: 1 });
+        output += tsplCenteredText(widthDots, Math.min(heightDots - 16, barcodeY + barcodeHeight + 4), barcodeValue, { x_scale: 1, y_scale: 1 });
       }
     }
 
